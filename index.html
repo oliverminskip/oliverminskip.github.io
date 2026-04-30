@@ -1635,8 +1635,17 @@ function downloadCashflowCSV(){
   XLSX.utils.book_append_sheet(wb, ws, cfSheetName);
   XLSX.utils.book_append_sheet(wb, wsPivot, 'Monthly Minimums');
 
+  // Use Blob download instead of XLSX.writeFile — more reliable on mobile Chrome
   const filename = `FCC_Cashflow_${fmtDate(today)}.xlsx`;
-  XLSX.writeFile(wb, filename);
+  const wbout = XLSX.write(wb, { bookType:'xlsx', type:'array' });
+  const blob  = new Blob([wbout], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url   = URL.createObjectURL(blob);
+  const a     = document.createElement('a');
+  a.href      = url;
+  a.download  = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
 }
 
 /* ---- IMPORT ---- */
@@ -1645,38 +1654,41 @@ function uploadCashflowCSV(input){
   if (!file) return;
   input.value = '';
 
+  if (typeof XLSX === 'undefined') {
+    alert('Excel library not loaded. Please check your internet connection and try again.');
+    return;
+  }
+
   const reader = new FileReader();
   reader.onload = e => {
     try {
-      const text = e.target.result;
-      const lines = text.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length < 2) throw new Error('File appears empty.');
+      // ── Read XLSX with SheetJS ─────────────────────────────────────────────
+      const data = new Uint8Array(e.target.result);
+      const wb   = XLSX.read(data, { type:'array', cellDates: false });
 
-      function parseCSVLine(line){
-        const result = []; let cur = ''; let inQ = false;
-        for (let i=0; i<line.length; i++){
-          const ch = line[i];
-          if (ch==='"'){ if(inQ && line[i+1]==='"'){ cur+='"'; i++; } else inQ=!inQ; }
-          else if (ch===',' && !inQ){ result.push(cur.trim()); cur=''; }
-          else cur+=ch;
-        }
-        result.push(cur.trim());
-        return result;
-      }
+      // Always read from the first sheet (Cash Flow)
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      // sheet_to_json with header:1 gives us array-of-arrays, raw:false gives
+      // us display values (so formula cells return their computed result as string)
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+
+      if (rows.length < 2) throw new Error('File appears empty.');
 
       function normaliseDate(raw){
-        raw = (raw||'').trim();
+        raw = (raw||'').toString().trim();
+        // ISO format yyyy-mm-dd
         if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+        // DD/MM/YYYY or DD-MM-YYYY
         const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
         if (m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
         return null;
       }
 
-      const header = parseCSVLine(lines[0]).map(h=>h.toLowerCase());
-      const dateIdx  = header.findIndex(h=>h==='date');
-      const notesIdx = header.findIndex(h=>h.includes('notes')||h.includes('override'));
+      const header = rows[0].map(h => (h||'').toString().toLowerCase().trim());
+      const dateIdx  = header.findIndex(h => h === 'date');
+      const notesIdx = header.findIndex(h => h.includes('notes') || h.includes('override'));
 
-      if (dateIdx === -1) throw new Error('CSV must have a "Date" column.');
+      if (dateIdx === -1) throw new Error('XLSX must have a "Date" column in the first row.');
 
       const colDefs = [
         { match:'money in',    txType:'moneyIn'        },
@@ -1694,70 +1706,63 @@ function uploadCashflowCSV(input){
       const colIndexMap = [];
       header.forEach((h, ci) => {
         const def = colDefs.find(d => h.includes(d.match));
-        if (def) colIndexMap.push({ ci, txType: def.txType, label: h });
+        if (def) colIndexMap.push({ ci, txType: def.txType });
       });
 
-      if (colIndexMap.length === 0) throw new Error('No recognised data columns found.');
+      if (colIndexMap.length === 0) throw new Error('No recognised data columns found. Check the file is a valid FCC export.');
 
-      // Build a FRESH flow map before we touch anything
+      // ── Build flow map ─────────────────────────────────────────────────────
       invalidateFlow();
       const flow = getFlow();
       const flowMap = {};
       flow.forEach(r => { flowMap[r.date] = r; });
 
-      // First pass — collect all the CSV data into a clean structure
-      // { date -> { txType -> amount } }
-      const csvData = {};
-      const csvNotes = {};
+      // ── First pass: collect data ───────────────────────────────────────────
+      const xlsxData  = {};
+      const xlsxNotes = {};
       let skipped = 0;
 
-      lines.slice(1).forEach(line => {
-        if (!line.trim()) return;
-        const cols = parseCSVLine(line);
-        const isoDate = normaliseDate(cols[dateIdx]);
+      rows.slice(1).forEach(cols => {
+        const rawDate = (cols[dateIdx]||'').toString().trim();
+        if (!rawDate) return;
+        const isoDate = normaliseDate(rawDate);
         if (!isoDate){ skipped++; return; }
 
-        if (!csvData[isoDate]) csvData[isoDate] = {};
+        if (!xlsxData[isoDate]) xlsxData[isoDate] = {};
 
         colIndexMap.forEach(({ ci, txType }) => {
-          const val = (cols[ci]||'').replace(/[£,\s]/g,'');
-          if (!val) return;
-          const amount = parseFloat(val);
+          const raw = (cols[ci]||'').toString().replace(/[£,\s]/g,'');
+          if (!raw) return;
+          const amount = parseFloat(raw);
           if (isNaN(amount) || amount === 0) return;
-          // Only keep first non-zero value per date+type (prevents duplication)
-          if (csvData[isoDate][txType] === undefined) {
-            csvData[isoDate][txType] = amount;
+          if (xlsxData[isoDate][txType] === undefined) {
+            xlsxData[isoDate][txType] = amount;
           }
         });
 
         if (notesIdx !== -1){
-          const note = (cols[notesIdx]||'').replace(/[£,\s]/g,'');
+          const note = (cols[notesIdx]||'').toString().replace(/[£,\s]/g,'');
           const noteVal = parseFloat(note);
-          if (!isNaN(noteVal)) csvNotes[isoDate] = noteVal;
+          if (!isNaN(noteVal)) xlsxNotes[isoDate] = noteVal;
         }
       });
 
-      // Second pass — apply changes
+      // ── Second pass: apply changes ─────────────────────────────────────────
       let overridesAdded = 0, oneOffAdded = 0, matchedExact = 0;
 
-      Object.entries(csvData).forEach(([isoDate, typeAmounts]) => {
+      Object.entries(xlsxData).forEach(([isoDate, typeAmounts]) => {
         Object.entries(typeAmounts).forEach(([txType, amount]) => {
           const dayRow = flowMap[isoDate];
           const matchingEvt = dayRow?.items.find(ev => ev.type === txType);
 
           if (matchingEvt){
-            // A scheduled transaction already covers this slot
             if (Math.abs(amount - matchingEvt.amount) > 0.005){
-              // Amount differs — create override
               setOverride(isoDate, matchingEvt.txId, amount);
               overridesAdded++;
             } else {
-              // Amount matches exactly — nothing to do
               matchedExact++;
             }
           } else {
-            // No scheduled transaction for this date/type — check if we already
-            // added a one-off for this type on this date (from a previous import)
             const alreadyExists = S.transactions.some(t =>
               t.freq === 'once' && t.startDate === isoDate && t.type === txType
             );
@@ -1771,23 +1776,23 @@ function uploadCashflowCSV(input){
         });
       });
 
-      // Apply checkpoints
-      Object.entries(csvNotes).forEach(([d, v]) => { S.checkpoints[d] = v; });
+      // Apply checkpoints from Notes column
+      Object.entries(xlsxNotes).forEach(([d, v]) => { S.checkpoints[d] = v; });
 
       save(); refreshCFInPlace();
 
       const parts = ['✅ Import complete!'];
-      if (overridesAdded > 0) parts.push(`• ${overridesAdded} amount override${overridesAdded>1?'s':''} applied (values differed from schedule)`);
-      if (oneOffAdded > 0)    parts.push(`• ${oneOffAdded} one-off transaction${oneOffAdded>1?'s':''} added (no matching schedule)`);
-      if (matchedExact > 0)   parts.push(`• ${matchedExact} entry${matchedExact>1?'s':''} matched schedule exactly — no change needed`);
+      if (overridesAdded > 0) parts.push(`• ${overridesAdded} amount override${overridesAdded>1?'s':''} applied`);
+      if (oneOffAdded > 0)    parts.push(`• ${oneOffAdded} one-off transaction${oneOffAdded>1?'s':''} added`);
+      if (matchedExact > 0)   parts.push(`• ${matchedExact} entr${matchedExact>1?'ies':'y'} matched schedule exactly — no change`);
       if (skipped > 0)        parts.push(`• ${skipped} row${skipped>1?'s':''} skipped (unreadable date)`);
-      if (Object.keys(csvNotes).length > 0) parts.push(`• ${Object.keys(csvNotes).length} balance checkpoint${Object.keys(csvNotes).length>1?'s':''} set from Notes column`);
-      if (overridesAdded===0 && oneOffAdded===0) parts.push('• No new changes — your schedule already matches the CSV.');
+      if (Object.keys(xlsxNotes).length > 0) parts.push(`• ${Object.keys(xlsxNotes).length} balance checkpoint${Object.keys(xlsxNotes).length>1?'s':''} set from Notes column`);
+      if (overridesAdded===0 && oneOffAdded===0) parts.push('• No new changes — schedule already matches.');
       alert(parts.join('\n'));
 
     } catch(err){ alert('Import failed: ' + err.message); }
   };
-  reader.readAsText(file);
+  reader.readAsArrayBuffer(file);
 }
 
 
@@ -1895,7 +1900,7 @@ function renderCashFlow(){
     <button class="btn btn-ghost btn-sm" onclick="openCheckpointsModal()">⚓ Checkpoints (${Object.keys(S.checkpoints).length})</button>
     <div style="width:1px;height:20px;background:var(--border);margin:0 2px"></div>
     <button class="btn btn-ghost btn-sm" onclick="downloadCashflowCSV()" title="Download cashflow as Excel workbook with live formulas">⬇ Export XLSX</button>
-    <label class="btn btn-ghost btn-sm" style="cursor:pointer" title="Upload cashflow CSV">⬆ Import CSV<input type="file" accept=".csv" style="display:none" onchange="uploadCashflowCSV(this)"></label>
+    <label class="btn btn-ghost btn-sm" style="cursor:pointer" title="Upload FCC Excel export">⬆ Import XLSX<input type="file" accept=".xlsx" style="display:none" onchange="uploadCashflowCSV(this)"></label>
     <button class="btn btn-ghost btn-sm" onclick="if(confirm('Remove duplicate one-off transactions from previous imports?'))cleanupDuplicateOneOffs()" title="Clean up duplicate transactions from bad imports" style="color:var(--amber)">🧹 Cleanup</button>
   </div>
 </div>
