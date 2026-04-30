@@ -8,9 +8,10 @@
 <script>
   // ── VERSION CONTROL ──────────────────────────────────────────
   // Update this whenever deploying a new version to Netlify
-  const FCC_VERSION = 'v13.16';
+  const FCC_VERSION = 'v13.17';
   const FCC_VERSION_DATE = '2026-04-29';
   const FCC_CHANGELOG = [
+    { v:'v13.17', date:'2026-04-30', note:'Overrides: Promote & Clear converts overrides to permanent one-offs keeping CF identical; import blank/0 now zeroes scheduled transactions' },
     { v:'v13.16', date:'2026-04-30', note:'Export: XLSX workbook with live balance formula (row 2 anchored, row 3+ =prev+in-out), savings contribution columns included, monthly minimum pivot on Sheet 2' },
     { v:'v13.15', date:'2026-04-30', note:'Fix: monthly min balance spark chart fully tappable on mobile — header, container and each bar all open breakdown modal' },
     { v:'v13.14', date:'2026-04-30', note:'Savings: RAG chart colouring (red below target/green above); prominent target line; RAG badge + progress bar on each pot card' },
@@ -1746,9 +1747,10 @@ function uploadCashflowCSV(input){
 
         colIndexMap.forEach(({ ci, txType }) => {
           const raw = (cols[ci]||'').toString().replace(/[£,\s]/g,'');
-          if (!raw) return;
-          const amount = parseFloat(raw);
-          if (isNaN(amount) || amount === 0) return;
+          // Blank or 0 = deliberate zero (user cleared the cell) — store as 0
+          // so the second pass can override/remove the scheduled transaction.
+          const amount = raw === '' ? 0 : parseFloat(raw);
+          if (isNaN(amount)) return;
           if (xlsxData[isoDate][txType] === undefined) {
             xlsxData[isoDate][txType] = amount;
           }
@@ -1762,7 +1764,7 @@ function uploadCashflowCSV(input){
       });
 
       // ── Second pass: apply changes ─────────────────────────────────────────
-      let overridesAdded = 0, oneOffAdded = 0, matchedExact = 0;
+      let overridesAdded = 0, oneOffAdded = 0, matchedExact = 0, zeroed = 0;
 
       Object.entries(xlsxData).forEach(([isoDate, typeAmounts]) => {
         Object.entries(typeAmounts).forEach(([txType, amount]) => {
@@ -1770,13 +1772,18 @@ function uploadCashflowCSV(input){
           const matchingEvt = dayRow?.items.find(ev => ev.type === txType);
 
           if (matchingEvt){
-            if (Math.abs(amount - matchingEvt.amount) > 0.005){
+            if (amount === 0){
+              // Deliberately zeroed in spreadsheet — override to 0 (nullifies for this date)
+              setOverride(isoDate, matchingEvt.txId, 0);
+              zeroed++;
+            } else if (Math.abs(amount - matchingEvt.amount) > 0.005){
               setOverride(isoDate, matchingEvt.txId, amount);
               overridesAdded++;
             } else {
               matchedExact++;
             }
           } else {
+            if (amount === 0) return; // blank cell, no scheduled tx — nothing to do
             const alreadyExists = S.transactions.some(t =>
               t.freq === 'once' && t.startDate === isoDate && t.type === txType
             );
@@ -1797,6 +1804,7 @@ function uploadCashflowCSV(input){
 
       const parts = ['✅ Import complete!'];
       if (overridesAdded > 0) parts.push(`• ${overridesAdded} amount override${overridesAdded>1?'s':''} applied`);
+      if (zeroed > 0)         parts.push(`• ${zeroed} transaction${zeroed>1?'s':''} zeroed out (blank/0 in spreadsheet)`);
       if (oneOffAdded > 0)    parts.push(`• ${oneOffAdded} one-off transaction${oneOffAdded>1?'s':''} added`);
       if (matchedExact > 0)   parts.push(`• ${matchedExact} entr${matchedExact>1?'ies':'y'} matched schedule exactly — no change`);
       if (skipped > 0)        parts.push(`• ${skipped} row${skipped>1?'s':''} skipped (unreadable date)`);
@@ -2339,13 +2347,56 @@ function deleteOneOff(txId){
   });
   save(); closeModal(); refreshCFInPlace();
 }
+function promoteAndClearOverrides(){
+  // Convert each override into a permanent one-off transaction at the overridden amount,
+  // then clear the override flag. Cash flow stays identical — orange dots disappear.
+  const keys = Object.keys(S.overrides);
+  let promoted = 0, skipped = 0;
+
+  keys.forEach(k => {
+    const [date, txId] = k.split('__');
+    const amount = S.overrides[k];
+    const tx = S.transactions.find(t => t.id === txId);
+    if (!tx) { skipped++; return; }
+
+    // Check if a one-off already exists for this date+type (from a previous promote)
+    const alreadyExists = S.transactions.some(t =>
+      t.freq === 'once' && t.startDate === date && t.type === tx.type && t.id !== txId
+    );
+    if (!alreadyExists){
+      S.transactions.push({
+        id: uid(),
+        name: tx.name,
+        amount: amount || 0,
+        type: tx.type,
+        freq: 'once',
+        startDate: date,
+        endDate: null,
+        dayOfMonth: null,
+        category: tx.type
+      });
+      promoted++;
+    }
+  });
+
+  // Clear all overrides
+  S.overrides = {};
+  save();
+  closeModal();
+  refreshCFInPlace();
+  alert(`✅ Done — ${promoted} override${promoted!==1?'s':''} promoted to permanent one-off transactions. Cash flow unchanged.`);
+}
+
 function openOverridesModal(){
   const keys = Object.keys(S.overrides).sort();
   openModal(`
     <h3>🟡 Active Overrides</h3>
     ${keys.length === 0 ? '<div class="empty-state">No overrides. Tap any amount in Cash Flow to create one.</div>' : `
     <p style="font-size:11px;color:var(--text3);margin-bottom:12px">These one-off edits override the schedule on specific dates.</p>
-    <div class="sch-tbl-wrap" style="max-height:50vh;overflow-y:auto"><table class="sch-tbl">
+    <div style="background:rgba(34,212,126,0.08);border:1px solid rgba(34,212,126,0.2);border-radius:8px;padding:10px;margin-bottom:12px;font-size:11px;color:var(--text2);line-height:1.5">
+      💡 <strong>Promote &amp; Clear</strong> — converts all overrides into permanent one-off transactions, then removes the orange flags. Your cash flow stays exactly as it is.
+    </div>
+    <div class="sch-tbl-wrap" style="max-height:40vh;overflow-y:auto"><table class="sch-tbl">
       <thead><tr><th>Date</th><th>Transaction</th><th>Amount</th><th></th></tr></thead>
       <tbody>${keys.map(k => {
         const [date, txId] = k.split('__');
@@ -2354,13 +2405,14 @@ function openOverridesModal(){
         return `<tr>
           <td class="mono">${dateLabel(parseDate(date))}</td>
           <td>${tx?tx.name:'(deleted)'}</td>
-          <td class="mono">${v===null?'<span class="c-red">Cancelled</span>':fmt(v)}</td>
+          <td class="mono">${v===0?'<span class="c-red">Zeroed</span>':v===null?'<span class="c-red">Cancelled</span>':fmt(v)}</td>
           <td><button class="btn btn-danger btn-sm" onclick="clearOverride('${date}','${txId}');closeModal();refreshCFInPlace()">Revert</button></td>
         </tr>`;
       }).join('')}</tbody>
     </table></div>
     <div class="form-actions" style="margin-top:12px">
-      <button class="btn btn-danger" onclick="if(confirm('Clear ALL overrides?')){S.overrides={};save();closeModal();refreshCFInPlace()}">Clear All</button>
+      <button class="btn btn-primary" onclick="if(confirm('Promote all overrides to permanent one-offs and clear the orange flags? Cash flow will stay the same.')){promoteAndClearOverrides()}">✅ Promote &amp; Clear</button>
+      <button class="btn btn-danger" onclick="if(confirm('Revert ALL overrides? This will restore original scheduled amounts.')){S.overrides={};save();closeModal();refreshCFInPlace()}">↩ Revert All</button>
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
     </div>
     `}
