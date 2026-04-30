@@ -8,9 +8,12 @@
 <script>
   // ── VERSION CONTROL ──────────────────────────────────────────
   // Update this whenever deploying a new version to Netlify
-  const FCC_VERSION = 'v13.13';
+  const FCC_VERSION = 'v13.16';
   const FCC_VERSION_DATE = '2026-04-29';
   const FCC_CHANGELOG = [
+    { v:'v13.16', date:'2026-04-30', note:'Export: XLSX workbook with live balance formula (row 2 anchored, row 3+ =prev+in-out), savings contribution columns included, monthly minimum pivot on Sheet 2' },
+    { v:'v13.15', date:'2026-04-30', note:'Fix: monthly min balance spark chart fully tappable on mobile — header, container and each bar all open breakdown modal' },
+    { v:'v13.14', date:'2026-04-30', note:'Savings: RAG chart colouring (red below target/green above); prominent target line; RAG badge + progress bar on each pot card' },
     { v:'v13.13', date:'2026-04-30', note:'Savings: manual deposit button (↑) with history; dashboard: min balance card clickable with month-by-month breakdown modal; net worth shows today date' },
     { v:'v13.12', date:'2026-04-30', note:'Fix: savings extrapolation uses trailing 3-month average not global average — zero contributions at CF window end = no phantom dashed growth' },
     { v:'v13.11', date:'2026-04-30', note:'Fix: savings extrapolation stops exactly at target (no overshoot); extrapolated segment renders faded+dashed vs solid CF-backed data' },
@@ -488,6 +491,7 @@ hr.div{border:none;border-top:1px solid var(--border);margin:16px 0}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 /* ==========================================================================
    STATE
@@ -1143,8 +1147,11 @@ function renderDashboard(){
     <div id="dash-milestones" style="margin-top:10px"></div>
   </div>
   <div class="card">
-    <div class="kpi-label">📅 Monthly Min Balance (${today.getFullYear()})</div>
-    <div class="spark" id="dash-spark" style="margin-top:12px"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="openMinBalModal()">
+      <div class="kpi-label">📅 Monthly Min Balance (${today.getFullYear()})</div>
+      <span style="font-size:10px;color:var(--accent)">tap for details ›</span>
+    </div>
+    <div class="spark" id="dash-spark" style="margin-top:12px;cursor:pointer" onclick="openMinBalModal()"></div>
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px" id="dash-spark-labels"></div>
     <div class="kpi-label" style="margin-top:12px">Full Year Average</div>
     <div class="kpi-value" id="dash-avg-bal" style="font-size:20px">—</div>
@@ -1197,10 +1204,10 @@ function renderDashboard(){
   const avg = known.length ? known.reduce((a,b)=>a+b,0)/known.length : 0;
   document.getElementById('dash-avg-bal').textContent = fmt(avg);
   document.getElementById('dash-spark').innerHTML = sparVals.map((v,i) => {
-    if (v === null) return `<div class="spark-b" style="height:4px;background:var(--border);opacity:0.4" title="${months12[i]}: no data"></div>`;
+    if (v === null) return `<div class="spark-b" style="height:4px;background:var(--border);opacity:0.4" title="${months12[i]}: no data" onclick="openMinBalModal()"></div>`;
     const h = Math.max((v/sparMax)*100, 5);
     const col = v<250?'var(--red)':v<600?'var(--amber)':'var(--green)';
-    return `<div class="spark-b" style="height:${h}%;background:${col};opacity:0.8" title="${months12[i]}: ${fmt(v)}"></div>`;
+    return `<div class="spark-b" style="height:${h}%;background:${col};opacity:0.8" title="${months12[i]}: ${fmt(v)}" onclick="openMinBalModal()"></div>`;
   }).join('');
   document.getElementById('dash-spark-labels').innerHTML = months12.map(m => `<span>${m[0]}</span>`).join('');
 
@@ -1470,56 +1477,166 @@ function groupTxByName(){
 
 /* ---- EXPORT ---- */
 function downloadCashflowCSV(){
+  // ── Column layout ──────────────────────────────────────────────────────────
+  // A  Date
+  // B  Day
+  // C  Money In
+  // D  Spending
+  // E  Credit Card
+  // F  Loans
+  // G  Bills
+  // H  House Acct
+  // I  Joint Sav (contribution)
+  // J  Emerg Fund (contribution)
+  // K  T212 (contribution)
+  // L  Personal Sav (contribution)
+  // M  Balance  ← row 2 static, row 3+ live formula
+  // N  Notes / Override (blank on export; used on import)
+  // ──────────────────────────────────────────────────────────────────────────
+
+  if (typeof XLSX === 'undefined') {
+    alert('Excel export library not loaded. Please check your internet connection and try again.');
+    return;
+  }
+
   const flow = getFlow();
   const windowStart = addMonths(today, -1);
   const rows = flow.filter(r => r.dateObj >= windowStart);
+  if (rows.length === 0) { alert('No data to export.'); return; }
 
-  const headers = ['Date','Day','Money In','Spending','Credit Card','Loans','Bills',
-    'House Acct','Joint Sav','Emerg Fund','T212','Personal','Balance',
-    'Notes (leave blank or enter an amount to override)'];
+  // ── Sheet 1: Cash Flow ────────────────────────────────────────────────────
+  const wsData = [];
 
-  const csvRows = [headers];
+  // Header row
+  wsData.push([
+    'Date','Day',
+    'Money In','Spending','Credit Card','Loans','Bills',
+    'House Acct','Joint Sav','Emerg Fund','T212','Personal Sav',
+    'Balance',
+    'Notes (blank or amount to override balance on import)'
+  ]);
 
-  rows.forEach(r => {
-    const c = r.cols;
-    const dayName = r.dateObj.toLocaleDateString('en-GB',{weekday:'short'});
-    const isToday = r.date === fmtDate(today) ? 'TODAY' : '';
-    csvRows.push([
-      r.dateObj.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'}),
-      dayName + (isToday ? ' *TODAY*' : ''),
-      c.moneyIn        || '',
-      c.spending       || '',
-      c.creditCard     || '',
-      c.loans          || '',
-      c.bills          || '',
-      c.houseAccount   || '',
-      c.jointSavings   || '',
-      c.emergencyFund  || '',
-      c.t212           || '',
-      c.personalSavings|| '',
-      r.runBal.toFixed(2),
-      '' // notes/override column — blank on export, used on import
+  rows.forEach((r, i) => {
+    const c   = r.cols;
+    const excelDate = r.dateObj.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'});
+    const dayName   = r.dateObj.toLocaleDateString('en-GB',{weekday:'short'});
+    const isToday   = r.date === fmtDate(today);
+    const rowNum    = i + 2; // Excel row number (1=header, 2=first data)
+
+    // Balance: first row is static (the actual computed balance as anchor),
+    // subsequent rows use a live formula so editing any cell recalculates forward.
+    // Formula: prev_balance + MoneyIn - Spending - CreditCard - Loans - Bills
+    //                       - HouseAcct - JointSav - EmergFund - T212 - PersonalSav
+    const balCell = i === 0
+      ? r.runBal  // static number — anchor point
+      : { f: `M${rowNum-1}+C${rowNum}-D${rowNum}-E${rowNum}-F${rowNum}-G${rowNum}-H${rowNum}-I${rowNum}-J${rowNum}-K${rowNum}-L${rowNum}` };
+
+    wsData.push([
+      excelDate,
+      dayName + (isToday ? ' ◀ TODAY' : ''),
+      c.moneyIn         || '',
+      c.spending        || '',
+      c.creditCard      || '',
+      c.loans           || '',
+      c.bills           || '',
+      c.houseAccount    || '',
+      c.jointSavings    || '',
+      c.emergencyFund   || '',
+      c.t212            || '',
+      c.personalSavings || '',
+      balCell,
+      '' // Notes/override — user fills this in, imports back
     ]);
   });
 
-  const csv = csvRows.map(row =>
-    row.map(v => {
-      const s = String(v);
-      return s.includes(',') || s.includes('"') || s.includes('\n')
-        ? '"' + s.replace(/"/g,'""') + '"'
-        : s;
-    }).join(',')
-  ).join('\r\n');
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
 
-  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `cashflow_${fmtDate(today)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // ── Column widths ─────────────────────────────────────────────────────────
+  ws['!cols'] = [
+    {wch:12}, // A Date
+    {wch:12}, // B Day
+    {wch:11}, // C Money In
+    {wch:11}, // D Spending
+    {wch:13}, // E Credit Card
+    {wch:9},  // F Loans
+    {wch:9},  // G Bills
+    {wch:12}, // H House Acct
+    {wch:11}, // I Joint Sav
+    {wch:12}, // J Emerg Fund
+    {wch:9},  // K T212
+    {wch:14}, // L Personal Sav
+    {wch:13}, // M Balance
+    {wch:40}, // N Notes
+  ];
+
+  // ── Freeze top row + format Balance column as £ currency ─────────────────
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+
+  // Apply currency format to numeric columns C:M (cols 2-12, 0-indexed)
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  for (let R = 1; R <= range.e.r; R++) {
+    for (let C = 2; C <= 12; C++) {
+      const cellAddr = XLSX.utils.encode_cell({r: R, c: C});
+      if (ws[cellAddr] && ws[cellAddr].t === 'n') {
+        ws[cellAddr].z = '£#,##0.00';
+      }
+    }
+    // Balance column (M = col 12) — also format formula cells
+    const balAddr = XLSX.utils.encode_cell({r: R, c: 12});
+    if (ws[balAddr]) ws[balAddr].z = '£#,##0.00';
+  }
+
+  // ── Sheet 2: Monthly Minimum Pivot ────────────────────────────────────────
+  // Uses MINIFS to pull the lowest balance from each calendar month.
+  // Fully dynamic — edit any row on Sheet 1 and this updates automatically.
+  const cfSheetName = 'Cash Flow';
+  const pivotData = [];
+
+  pivotData.push(['Month', 'Lowest Balance', 'Status']);
+
+  // Generate one row per month in the export window
+  const months = [];
+  const seen = new Set();
+  rows.forEach(r => {
+    const key = r.dateObj.toLocaleDateString('en-GB',{month:'short',year:'numeric'});
+    if (!seen.has(key)) { seen.add(key); months.push({ key, date: r.dateObj }); }
+  });
+
+  months.forEach((m, i) => {
+    const pivRow = i + 2;
+    // MINIFS formula: min of Balance column where Date column is in this month/year
+    // We use TEXT() comparison on the date string to match month
+    const monthStr = m.date.toLocaleDateString('en-GB',{month:'short',year:'numeric'});
+    // Use MINIFS on the balance column filtering by month text match
+    const lastDataRow = rows.length + 1;
+    const minFormula = { f: `MINIFS('${cfSheetName}'!M2:M${lastDataRow},'${cfSheetName}'!A2:A${lastDataRow},"*${m.key.split(' ')[0]}*",'${cfSheetName}'!A2:A${lastDataRow},"*${m.date.getFullYear()}*")` };
+    // RAG status formula
+    const statusFormula = { f: `IF(B${pivRow}<250,"🔴 Danger",IF(B${pivRow}<600,"🟡 Caution","🟢 Safe"))` };
+
+    pivotData.push([ m.key, minFormula, statusFormula ]);
+  });
+
+  // Add summary rows
+  pivotData.push([]);
+  pivotData.push(['Year Average', { f: `AVERAGE(B2:B${months.length+1})` }, '']);
+  pivotData.push(['Lowest Month', { f: `MIN(B2:B${months.length+1})` }, '']);
+
+  const wsPivot = XLSX.utils.aoa_to_sheet(pivotData);
+  wsPivot['!cols'] = [ {wch:16}, {wch:16}, {wch:14} ];
+  // Format balance column as £
+  const pivRange = XLSX.utils.decode_range(wsPivot['!ref']);
+  for (let R = 1; R <= pivRange.e.r; R++) {
+    const c = XLSX.utils.encode_cell({r:R, c:1});
+    if (wsPivot[c]) wsPivot[c].z = '£#,##0.00';
+  }
+
+  // ── Build workbook and download ───────────────────────────────────────────
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, cfSheetName);
+  XLSX.utils.book_append_sheet(wb, wsPivot, 'Monthly Minimums');
+
+  const filename = `FCC_Cashflow_${fmtDate(today)}.xlsx`;
+  XLSX.writeFile(wb, filename);
 }
 
 /* ---- IMPORT ---- */
@@ -1777,7 +1894,7 @@ function renderCashFlow(){
     <button class="btn btn-ghost btn-sm" onclick="openOverridesModal()">Overrides (${Object.keys(S.overrides).length})</button>
     <button class="btn btn-ghost btn-sm" onclick="openCheckpointsModal()">⚓ Checkpoints (${Object.keys(S.checkpoints).length})</button>
     <div style="width:1px;height:20px;background:var(--border);margin:0 2px"></div>
-    <button class="btn btn-ghost btn-sm" onclick="downloadCashflowCSV()" title="Download cashflow as CSV">⬇ Export CSV</button>
+    <button class="btn btn-ghost btn-sm" onclick="downloadCashflowCSV()" title="Download cashflow as Excel workbook with live formulas">⬇ Export XLSX</button>
     <label class="btn btn-ghost btn-sm" style="cursor:pointer" title="Upload cashflow CSV">⬆ Import CSV<input type="file" accept=".csv" style="display:none" onchange="uploadCashflowCSV(this)"></label>
     <button class="btn btn-ghost btn-sm" onclick="if(confirm('Remove duplicate one-off transactions from previous imports?'))cleanupDuplicateOneOffs()" title="Clean up duplicate transactions from bad imports" style="color:var(--amber)">🧹 Cleanup</button>
   </div>
@@ -2648,10 +2765,22 @@ function renderSavings(){
       : '';
     const anchorLabel = `<span style="font-size:10px;color:var(--text3)">⚓ ${anchorDate}</span>`;
 
+    // RAG status for the card
+    const flow2 = flow; // alias for closure
+    const { principal: ragPrincipal } = computePotProjectionData(p, liveBalance, flow2);
+    const ragHitsTarget = ragPrincipal.some(v => v >= p.target);
+    const ragFinalVal   = ragPrincipal[ragPrincipal.length - 1] || liveBalance;
+    const ragStatus = ragFinalVal >= p.target ? ['green', '🟢 On target']
+                    : ragHitsTarget            ? ['amber', '🟡 Hits target']
+                    :                            ['red',   '🔴 Below target'];
+
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0">
-          <div class="kpi-label">${p.name}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="kpi-label">${p.name}</div>
+            <span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:4px;background:var(--${ragStatus[0]}-dim,rgba(0,0,0,0.1));color:var(--${ragStatus[0]})">${ragStatus[1]}</span>
+          </div>
           <div class="kpi-value c-green">${fmt(liveBalance)}</div>
           <div class="kpi-sub" style="margin-top:2px">of ${fmt(p.target)} target</div>
           <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${cfLabel}${rateLabel} ${anchorLabel}</div>
@@ -2666,7 +2795,7 @@ function renderSavings(){
 
       <div class="prog-wrap" style="margin-top:10px">
         <div class="prog-labels"><span>${(pct*100).toFixed(1)}%</span><span class="mono">${fmt(rem)} to go</span></div>
-        <div class="prog-bg"><div class="prog-fill" style="width:${(Math.min(pct,1)*100).toFixed(1)}%;background:${p.color||'var(--accent)'}"></div></div>
+        <div class="prog-bg"><div class="prog-fill" style="width:${(Math.min(pct,1)*100).toFixed(1)}%;background:${ragStatus[0]==='green'?'var(--green)':ragStatus[0]==='amber'?'var(--amber)':'var(--red)'}"></div></div>
       </div>
 
       <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text2)">
@@ -2708,25 +2837,51 @@ function renderSavings(){
     if (charts[existingKey]) charts[existingKey].destroy();
 
     const targetLine = Array(labels.length).fill(p.target);
-
-    // Split principal/interest into CF-backed (solid) and extrapolated (dashed) segments.
-    // Chart.js segment option lets us dash individual points beyond the CF window.
     const hasExtrapolation = labels.length > cfPointCount;
+
+    // RAG colours
+    const COL_RED   = '#ff5470';
+    const COL_AMBER = '#f0a732';
+    const COL_GREEN = '#22d47e';
+    const FILL_RED   = 'rgba(255,84,112,0.10)';
+    const FILL_GREEN = 'rgba(34,212,126,0.12)';
+
+    // For each data point: is the principal at or above target?
+    // We use this in segment callbacks to colour the line RAG.
+    const aboveTarget = principal.map(v => v >= p.target);
+
+    // Determine overall RAG status for the pot
+    const finalVal = principal[principal.length - 1] || 0;
+    const hitsTarget = principal.some(v => v >= p.target);
+    const ragColor = finalVal >= p.target ? COL_GREEN
+                   : hitsTarget           ? COL_AMBER
+                   :                        COL_RED;
+
+    // Helper: interpolate crossing point fraction between two data points
+    const crossFrac = (v0, v1, tgt) => (tgt - v0) / (v1 - v0);
 
     const datasets = [
       {
         label: 'Principal',
         data: principal,
-        borderColor: resolvedColor,
-        backgroundColor: resolvedColor + '18',
-        borderWidth: 2,
+        borderColor: ragColor,
+        backgroundColor: FILL_RED,
+        borderWidth: 2.5,
         pointRadius: 0,
         tension: 0.3,
         fill: true,
-        segment: hasExtrapolation ? {
+        segment: {
+          // Line colour: green once above target, red below; faded+dashed in extrapolation
+          borderColor: ctx => {
+            const isExtra = ctx.p0DataIndex >= cfPointCount - 1;
+            const above   = aboveTarget[ctx.p0DataIndex];
+            const base    = above ? COL_GREEN : COL_RED;
+            return isExtra ? base + '77' : base;
+          },
           borderDash: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? [5, 4] : undefined,
-          borderColor: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? resolvedColor + '88' : resolvedColor,
-        } : undefined,
+          // Fill: green above target, red below
+          backgroundColor: ctx => aboveTarget[ctx.p0DataIndex] ? FILL_GREEN : FILL_RED,
+        },
       }
     ];
 
@@ -2734,28 +2889,29 @@ function renderSavings(){
       datasets.push({
         label: 'With Interest',
         data: withInterest,
-        borderColor: '#22d47e',
-        backgroundColor: 'rgba(34,212,126,0.08)',
-        borderWidth: 2,
+        borderColor: COL_GREEN,
+        backgroundColor: 'transparent',
+        borderWidth: 1.5,
         pointRadius: 0,
         tension: 0.3,
         fill: false,
-        borderDash: [4,3],
-        segment: hasExtrapolation ? {
-          borderDash: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? [2, 4] : [4, 3],
-          borderColor: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? '#22d47e55' : '#22d47e',
-        } : undefined,
+        segment: {
+          borderDash: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? [2, 5] : [4, 3],
+          borderColor: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? COL_GREEN + '55' : COL_GREEN,
+        },
       });
     }
 
+    // Prominent target line
     datasets.push({
       label: 'Target',
       data: targetLine,
-      borderColor: 'rgba(255,255,255,0.15)',
-      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.55)',
+      borderWidth: 2,
       pointRadius: 0,
       fill: false,
-      borderDash: [2,4],
+      borderDash: [6, 3],
+      order: 0, // draw on top
     });
 
     charts[existingKey] = new Chart(canvas.getContext('2d'), {
@@ -2767,13 +2923,23 @@ function renderSavings(){
         interaction: { mode:'index', intersect:false },
         plugins: {
           legend: {
-            display: hasInterest,
+            display: true,
             position: 'bottom',
-            labels: { boxWidth:8, font:{size:9}, color: cssVar('--chart-tick'), padding:8 }
+            labels: {
+              boxWidth: 8, font:{size:9}, color: cssVar('--chart-tick'), padding:8,
+              filter: item => item.text !== 'Principal' || hasInterest // hide Principal label when no interest
+            }
           },
           tooltip: {
             callbacks: {
-              label: ctx => `${ctx.dataset.label}: ${fmt(ctx.raw)}`
+              label: ctx => `${ctx.dataset.label}: ${fmt(ctx.raw)}`,
+              afterBody: ctx => {
+                const v = ctx[0]?.raw;
+                if (v === undefined) return '';
+                if (v >= p.target) return '✅ Above target';
+                const gap = p.target - v;
+                return `${fmt(gap)} to go`;
+              }
             }
           }
         },
@@ -2783,6 +2949,7 @@ function renderSavings(){
             ticks: { color: cssVar('--chart-tick'), font:{size:8}, maxTicksLimit:6 }
           },
           y: {
+            min: 0,
             grid: { color: cssVar('--chart-grid') },
             ticks: {
               color: cssVar('--chart-tick'),
