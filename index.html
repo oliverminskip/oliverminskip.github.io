@@ -1,0 +1,4072 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#f3f4f8">
+<title>Financial Command Centre</title>
+<script>
+  // ── VERSION CONTROL ──────────────────────────────────────────
+  // Update this whenever deploying a new version to Netlify
+  const FCC_VERSION = 'v13.12';
+  const FCC_VERSION_DATE = '2026-04-29';
+  const FCC_CHANGELOG = [
+    { v:'v13.12', date:'2026-04-30', note:'Fix: savings extrapolation uses trailing 3-month average not global average — zero contributions at CF window end = no phantom dashed growth' },
+    { v:'v13.11', date:'2026-04-30', note:'Fix: savings extrapolation stops exactly at target (no overshoot); extrapolated segment renders faded+dashed vs solid CF-backed data' },
+    { v:'v13.10', date:'2026-04-30', note:'Fix: savings chart no longer cuts short when target is hit mid-window; extrapolation only fires with positive avg contributions (stops phantom post-CF growth)' },
+    { v:'v13.9', date:'2026-04-30', note:'Fix: addMonths day-overflow (Feb skipped when today is 31st); clamp to day 1' },
+    { v:'v13.8', date:'2026-04-30', note:'Debt tab: per-card standard payment field; adaptive engine; per-card promo expiry cell (red if balance remains at 0% end, green if cleared); green = snowball surplus flowing' },
+    { v:'v13.7', date:'2026-04-30', note:'Debt tab: per-card standard payment field; clear-date recalculates live from actual minimums; orange promo-expiry row highlight in allocation table' },
+    { v:'v13.6', date:'2026-04-29', note:'One-off delete; light mode default; major desktop scale-up (38px KPI, 40px countdown, 26px card padding, 40px page padding)' },
+    { v:'v13.5', date:'2026-04-29', note:'Larger fonts; theme syncs via Firebase; savings charts extend to target; interest cap fixed; CF scroll preserved on edit; year shown in CF nav' },
+    { v:'v13.4', date:'2026-04-29', note:'Larger fonts; theme syncs across devices via Firebase; savings charts extend to target date' },
+    { v:'v13.3', date:'2026-04-29', note:'Fix: savings pot chart records end-of-month snapshots correctly' },
+    { v:'v13.2', date:'2026-04-29', note:'Clean topbar — TO/theme/reset moved to Settings. Blank INITIAL_DATA for new users.' },
+    { v:'v13.1', date:'2026-04-29', note:'Fix: cancelled CF occurrences now persist through Firebase reload (null override bug)' },
+    { v:'v13.0', date:'2026-04-29', note:'Firebase cloud sync, Google sign-in, Netlify hosting' },
+    { v:'v12.0', date:'2026-04-28', note:'Settings page, onboarding, notifications, interest modelling, avalanche toggle' },
+    { v:'v11.0', date:'2026-04-28', note:'Savings charts per pot, dynamic CF columns based on pots' },
+    { v:'v10.0', date:'2026-04-27', note:'Responsive mobile layout, data backup/restore, settings' },
+    { v:'v9.0',  date:'2026-04-27', note:'Forward-walk savings projections using actual CF transactions' },
+    { v:'v8.0',  date:'2026-04-27', note:'Smart debt snowball engine with 0% deadline protection and cascade' },
+    { v:'v7.0',  date:'2026-04-26', note:'Live savings balances with anchor system and withdrawals' },
+  ];
+  // ─────────────────────────────────────────────────────────────
+</script>
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+/* ── DARK THEME (default) ── */
+:root {
+  --bg:#0a0b10;
+  --bg2:#0f1117;
+  --surface:#13151f;
+  --surface2:#191c28;
+  --surface3:#1f2235;
+  --border:#252840;
+  --border2:#2e3355;
+  --accent:#4f8ef7;
+  --accent-glow:rgba(79,142,247,0.15);
+  --green:#22d47e;
+  --green-dim:rgba(34,212,126,0.10);
+  --amber:#f0a732;
+  --amber-dim:rgba(240,167,50,0.10);
+  --red:#ff5470;
+  --red-dim:rgba(255,84,112,0.10);
+  --purple:#a07cff;
+  --text:#d8e0f5;
+  --text2:#7e8aad;
+  --text3:#434963;
+  --mono:'DM Mono',monospace;
+  --sans:'DM Sans',sans-serif;
+  --radius:8px;
+  --topbar-bg:rgba(10,11,16,0.94);
+  --grid-color:rgba(255,255,255,0.025);
+  --shadow:0 1px 3px rgba(0,0,0,0.4);
+  --chart-grid:rgba(255,255,255,0.04);
+  --chart-tick:#434963;
+}
+
+/* ── LIGHT THEME ── */
+:root.light {
+  --bg:#f3f4f8;
+  --bg2:#eaecf2;
+  --surface:#ffffff;
+  --surface2:#f7f8fc;
+  --surface3:#eef0f6;
+  --border:#dde0ec;
+  --border2:#c8cde0;
+  --accent:#2d6ef5;
+  --accent-glow:rgba(45,110,245,0.10);
+  --green:#0aad60;
+  --green-dim:rgba(10,173,96,0.10);
+  --amber:#d4870a;
+  --amber-dim:rgba(212,135,10,0.10);
+  --red:#e83050;
+  --red-dim:rgba(232,48,80,0.10);
+  --purple:#7c50f0;
+  --text:#1a1d2e;
+  --text2:#5a6080;
+  --text3:#9099b8;
+  --topbar-bg:rgba(255,255,255,0.95);
+  --grid-color:rgba(0,0,0,0.03);
+  --shadow:0 1px 3px rgba(0,0,0,0.08),0 0 0 1px rgba(0,0,0,0.04);
+  --chart-grid:rgba(0,0,0,0.05);
+  --chart-tick:#9099b8;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;min-height:100dvh;overflow-x:hidden;font-size:16px;padding-bottom:env(safe-area-inset-bottom);transition:background .2s,color .2s}
+
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(var(--grid-color) 1px,transparent 1px),linear-gradient(90deg,var(--grid-color) 1px,transparent 1px);background-size:32px 32px;pointer-events:none;z-index:0}
+
+/* TOPBAR */
+#topbar{position:sticky;top:0;z-index:200;height:50px;background:var(--topbar-bg);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 14px;gap:10px;padding-top:env(safe-area-inset-top)}
+@media(min-width:1000px){#topbar{height:62px;padding:0 32px;gap:16px}}
+#topbar .logo{font-weight:700;font-size:13px;color:var(--accent);letter-spacing:-0.2px;white-space:nowrap;display:flex;align-items:center;gap:5px}
+@media(min-width:1000px){#topbar .logo{font-size:17px}}
+#topbar .logo-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block}
+.nav-tabs{display:flex;gap:1px;flex:1;overflow-x:auto;scrollbar-width:none}
+.nav-tabs::-webkit-scrollbar{display:none}
+.nav-tab{padding:6px 12px;border-radius:5px;cursor:pointer;font-size:13px;color:var(--text2);white-space:nowrap;border:none;background:none;font-family:var(--sans);font-weight:500;transition:all .12s;letter-spacing:0.01em}
+@media(min-width:1000px){.nav-tab{font-size:15px;padding:8px 16px}}
+.nav-tab:hover{color:var(--text);background:var(--surface2)}
+.nav-tab.active{background:var(--surface2);color:var(--accent);border:1px solid var(--border)}
+.topbar-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
+#forecast-horizon-select{background:var(--surface2);border:1px solid var(--border);color:var(--text2);padding:4px 7px;border-radius:5px;font-size:11px;font-family:var(--sans);cursor:pointer;outline:none;transition:border-color .12s}
+#forecast-horizon-select:focus{border-color:var(--accent)}
+
+/* THEME TOGGLE */
+#theme-toggle{background:var(--surface2);border:1px solid var(--border);color:var(--text2);width:30px;height:28px;border-radius:5px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .12s;flex-shrink:0}
+#theme-toggle:hover{border-color:var(--accent);color:var(--accent)}
+
+/* PAGES */
+.page{display:none;padding:16px;max-width:1500px;margin:0 auto;position:relative;z-index:1}
+.page.active{display:block}
+@media(min-width:800px){.page{padding:20px}}
+@media(min-width:1000px){.page{padding:32px 40px}}
+
+/* GRIDS */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(min-width:1000px){.g2,.g3,.g4{gap:20px}}
+@media(max-width:900px){.g3,.g4{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+/* CARDS */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;position:relative;overflow:hidden;box-shadow:var(--shadow);transition:background .2s,border-color .2s}
+@media(min-width:1000px){.card{padding:26px 28px}}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--border2) 40%,transparent);opacity:0.5}
+.kpi-label{font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--text3);margin-bottom:6px}
+.kpi-value{font-family:var(--mono);font-size:26px;font-weight:500;letter-spacing:-1px;line-height:1}
+@media(min-width:600px){.kpi-value{font-size:28px}}
+@media(min-width:1000px){.kpi-value{font-size:38px}.kpi-label{font-size:12px;margin-bottom:10px}.kpi-sub{font-size:14px;margin-top:8px}}
+.kpi-sub{font-size:12px;color:var(--text2);margin-top:5px}
+.c-green{color:var(--green)}
+.c-red{color:var(--red)}
+.c-amber{color:var(--amber)}
+.c-accent{color:var(--accent)}
+.c-muted{color:var(--text2)}
+
+/* HEADER */
+.sh{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap}
+.sh h2{font-size:18px;font-weight:700;letter-spacing:-0.3px}
+.sh p{font-size:13px;color:var(--text2);margin-top:2px}
+@media(min-width:1000px){.sh h2{font-size:24px}.sh p{font-size:15px}}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;letter-spacing:0.02em}
+.b-green{background:var(--green-dim);color:var(--green)}
+.b-amber{background:var(--amber-dim);color:var(--amber)}
+.b-red{background:var(--red-dim);color:var(--red)}
+.b-accent{background:var(--accent-glow);color:var(--accent)}
+.b-purple{background:rgba(160,124,255,0.10);color:var(--purple)}
+
+/* ALERTS */
+.alert{padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:10px;border-left:2px solid;line-height:1.5}
+@media(min-width:1000px){.alert{font-size:14px;padding:12px 18px}}
+.al-red{background:var(--red-dim);border-color:var(--red);color:var(--red)}
+.al-amber{background:var(--amber-dim);border-color:var(--amber);color:var(--amber)}
+.al-green{background:var(--green-dim);border-color:var(--green);color:var(--green)}
+.al-blue{background:var(--accent-glow);border-color:var(--accent);color:var(--accent)}
+
+/* PROGRESS */
+.prog-wrap{margin-top:6px}
+.prog-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:3px}
+.prog-bg{background:var(--surface3);border-radius:99px;height:5px;overflow:hidden}
+.prog-fill{height:100%;border-radius:99px;transition:width .5s ease}
+
+/* COUNTDOWN */
+.countdown-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
+@media(max-width:700px){.countdown-grid{grid-template-columns:1fr 1fr}}
+.cd-box{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
+.cd-num{font-family:var(--mono);font-size:24px;font-weight:600;letter-spacing:-2px;color:var(--accent)}
+.cd-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--text3);margin-top:4px}
+@media(min-width:1000px){.cd-num{font-size:40px}.cd-label{font-size:12px;margin-top:6px}}
+
+/* =========================================================
+   SPREADSHEET TABLE — the hero of this app
+   ========================================================= */
+.ss-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;position:relative}
+.ss-scroll{overflow:auto;max-height:70vh;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+.ss-scroll::-webkit-scrollbar{width:8px;height:8px}
+.ss-scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+.ss-scroll::-webkit-scrollbar-track{background:transparent}
+
+table.ss{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;min-width:880px}
+@media(min-width:1000px){table.ss{font-size:15px}}
+
+/* Sticky header */
+.ss thead th{
+  position:sticky;top:0;z-index:10;
+  background:var(--surface2);padding:10px 10px;text-align:left;
+  font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;
+  color:var(--text3);border-bottom:1px solid var(--border);white-space:nowrap;
+  user-select:none
+}
+.ss thead th:first-child{position:sticky;left:0;z-index:11;background:var(--surface2)}
+.ss thead th:last-child{position:sticky;right:0;z-index:11;background:var(--surface2)}
+
+/* Rows */
+.ss tbody td{
+  padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:12px;
+  white-space:nowrap;position:relative;transition:background .1s
+}
+.ss tbody tr:last-child td{border-bottom:none}
+.ss tbody tr.today-row td{background:var(--accent-glow)}
+.ss tbody tr.today-row td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
+.ss tbody tr.past-row td{opacity:0.5}
+.ss tbody tr.weekend-row td{background:rgba(127,127,127,0.03)}
+
+/* Sticky first & last column */
+.ss tbody td:first-child{position:sticky;left:0;background:var(--surface);z-index:5}
+.ss tbody tr.today-row td:first-child{background:var(--surface2)}
+.ss tbody tr:hover td:first-child{background:var(--surface2)}
+.ss tbody td:last-child{position:sticky;right:0;background:var(--surface);z-index:5}
+.ss tbody tr.today-row td:last-child{background:var(--surface2)}
+
+.today-badge{display:inline-block;background:var(--accent);color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:6px;vertical-align:middle;letter-spacing:0.04em}
+
+.mono{font-family:var(--mono)}
+
+/* EDITABLE CELL */
+.ec{
+  cursor:pointer;
+  transition:background .1s, box-shadow .1s;
+  position:relative;
+  min-width:70px;
+}
+.ec:hover{background:var(--accent-glow)!important;box-shadow:inset 0 0 0 1px var(--accent)}
+.ec:active{background:rgba(61,127,255,0.18)!important}
+.ec.has-override{font-weight:600}
+.ec.has-override::before{
+  content:'';position:absolute;top:8px;right:6px;width:5px;height:5px;border-radius:50%;
+  background:var(--amber);box-shadow:0 0 6px rgba(245,166,35,0.5)
+}
+.ec.is-checkpoint{box-shadow:inset 0 0 0 1px var(--purple)}
+.ec.is-checkpoint::after{
+  content:'⚓';position:absolute;top:4px;right:4px;font-size:10px;color:var(--purple);opacity:0.7
+}
+.ec-empty{color:var(--text3);font-size:11px}
+.ec-empty:hover{color:var(--accent)}
+
+/* Keyboard focus */
+.ec.kb-focus{box-shadow:inset 0 0 0 2px var(--accent);background:var(--accent-glow)!important;z-index:6}
+
+/* Inline editor */
+.ec.editing{padding:0;background:var(--surface3)!important}
+.ec input.ss-edit{
+  width:100%;height:100%;min-height:34px;
+  background:transparent;border:none;outline:2px solid var(--accent);outline-offset:-2px;
+  color:var(--text);padding:8px 10px;font-size:12px;font-family:var(--mono);
+  text-align:left
+}
+
+/* Balance cell styling */
+.bal-cell{font-weight:600;font-size:13px}
+
+/* Week separator */
+.ss tbody tr.week-start td{border-top:1px solid var(--border2)}
+
+/* Date cell */
+.date-cell{min-width:95px}
+.date-cell-day{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-top:1px}
+
+/* FORMS */
+.fr{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:520px){.fr{grid-template-columns:1fr}}
+.fr3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media(max-width:700px){.fr3{grid-template-columns:1fr 1fr}}
+.fg{margin-bottom:10px}
+.fg label{display:block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3);margin-bottom:4px}
+input,select,textarea{background:var(--surface2);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:8px 10px;font-size:13px;font-family:var(--sans);outline:none;width:100%;transition:border-color .12s,background .2s;-webkit-appearance:none;appearance:none}
+input:focus,select:focus{border-color:var(--accent)}
+input[type="number"]{font-family:var(--mono)}
+.fg-hint{font-size:10px;color:var(--text3);margin-top:3px}
+.form-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+
+/* BUTTONS */
+.btn{padding:8px 14px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;border:none;font-family:var(--sans);letter-spacing:0.01em;transition:all .1s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;min-height:34px}
+@media(min-width:1000px){.btn{font-size:15px;padding:10px 20px;min-height:42px}}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{filter:brightness(1.1)}
+.btn-primary:active{transform:scale(0.97)}
+.btn-ghost{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.btn-sm{padding:4px 10px;font-size:11px;border-radius:4px;min-height:26px}
+.btn-danger{background:var(--red-dim);color:var(--red);border:1px solid rgba(255,84,112,0.15)}
+.btn-danger:hover{background:rgba(255,84,112,0.18)}
+.btn-amber{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(240,167,50,0.15)}
+.btn-amber:hover{background:rgba(240,167,50,0.22)}
+.btn-purple{background:rgba(160,124,255,0.10);color:var(--purple);border:1px solid rgba(160,124,255,0.2)}
+
+/* Choice buttons (override modal) */
+.choice{display:block;width:100%;text-align:left;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;margin-bottom:8px;cursor:pointer;transition:all .12s;color:var(--text);font-family:var(--sans)}
+.choice:hover{border-color:var(--accent);background:var(--surface3)}
+.choice-title{font-weight:600;font-size:13px;margin-bottom:2px}
+.choice-desc{font-size:11px;color:var(--text2);line-height:1.4}
+.choice.rec{border-color:var(--accent)}
+.choice.rec .choice-title::after{content:'  · RECOMMENDED';font-size:9px;color:var(--accent);letter-spacing:0.08em;font-weight:600}
+
+/* MODAL / BOTTOM SHEET */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:500;display:none;align-items:center;justify-content:center;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;width:calc(100% - 32px);max-width:520px;max-height:90vh;overflow-y:auto;position:relative;box-shadow:0 24px 64px rgba(0,0,0,0.5)}
+.modal h3{font-size:15px;font-weight:700;margin-bottom:14px;letter-spacing:-0.2px}
+.modal-close{position:absolute;top:12px;right:12px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text2);width:28px;height:28px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .12s}
+.modal-close:hover{color:var(--text);border-color:var(--accent)}
+
+/* Mobile: bottom sheet */
+@media(max-width:600px){
+  .modal-overlay{align-items:flex-end}
+  .modal{border-radius:12px 12px 0 0;max-height:85vh;width:100%;max-width:100%;padding-bottom:calc(18px + env(safe-area-inset-bottom));animation:slide-up .22s ease-out}
+  @keyframes slide-up{from{transform:translateY(100%)}to{transform:translateY(0)}}
+}
+
+/* Schedule table */
+.sch-tbl-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius);-webkit-overflow-scrolling:touch}
+.sch-tbl{width:100%;border-collapse:collapse;font-size:12px;min-width:700px}
+.sch-tbl th{background:var(--surface2);padding:8px 12px;text-align:left;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--text3);border-bottom:1px solid var(--border);white-space:nowrap}
+.sch-tbl td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:12px}
+.sch-tbl tr:last-child td{border-bottom:none}
+.sch-tbl tr:hover td{background:var(--surface2)}
+
+/* CHART */
+.chart-wrap{position:relative;height:220px;width:100%}
+.chart-wrap.tall{height:280px}
+
+/* SNOWBALL */
+.sb-card{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:8px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.sb-card.attack{border-color:var(--green);box-shadow:0 0 12px rgba(30,201,126,0.1)}
+.sb-name{font-weight:700;font-size:13px;flex:0 0 120px;min-width:100px}
+.sb-details{flex:1;min-width:180px}
+.sb-bar-wrap{flex:2;min-width:120px}
+.sb-actions{display:flex;gap:6px;margin-left:auto;flex-shrink:0}
+@media(max-width:520px){
+  .sb-card{flex-direction:column;gap:8px}
+  .sb-name{flex:none;width:100%}
+  .sb-actions{width:100%;justify-content:flex-end}
+}
+
+/* Snowball allocation table — mobile friendly */
+.snowball-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius)}
+.snowball-scroll table{min-width:500px}
+
+/* Settings toggle switch */
+.toggle-wrap{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border)}
+.toggle-wrap:last-child{border-bottom:none}
+.toggle-label{font-size:13px;font-weight:500}
+.toggle-hint{font-size:11px;color:var(--text2);margin-top:2px}
+.toggle{position:relative;width:42px;height:24px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{position:absolute;inset:0;background:var(--surface3);border-radius:24px;cursor:pointer;transition:.2s;border:1px solid var(--border)}
+.toggle input:checked + .toggle-slider{background:var(--accent)}
+.toggle-slider:before{content:'';position:absolute;width:18px;height:18px;left:2px;top:2px;background:white;border-radius:50%;transition:.2s}
+.toggle input:checked + .toggle-slider:before{transform:translateX(18px)}
+
+/* Onboarding */
+.onboard-step{display:none}
+.onboard-step.active{display:block}
+.onboard-progress{display:flex;gap:6px;margin-bottom:20px}
+.onboard-pip{flex:1;height:3px;border-radius:99px;background:var(--border)}
+.onboard-pip.done{background:var(--accent)}
+.onboard-pip.active{background:var(--accent);opacity:0.5}
+
+/* Notification badge */
+.notif-badge{position:absolute;top:-4px;right:-4px;width:8px;height:8px;border-radius:50%;background:var(--red);border:2px solid var(--bg)}
+
+/* SPARKLINE */
+.spark{display:flex;align-items:flex-end;gap:2px;height:40px}
+.spark-b{border-radius:2px;flex:1;transition:opacity .2s;cursor:pointer;min-height:3px}
+.spark-b:hover{opacity:1!important}
+
+/* LEGEND LINE */
+.legend-row{display:flex;gap:14px;flex-wrap:wrap;font-size:10px;color:var(--text2);margin-top:8px;padding:8px 12px;background:var(--surface2);border-radius:6px;border:1px solid var(--border)}
+.legend-row > div{display:flex;align-items:center;gap:5px}
+.legend-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+/* Budget category row */
+.bcat-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.bcat-row:last-child{border:none}
+.bcat-name{flex:0 0 140px;font-size:12px;font-weight:600}
+.bcat-bars{flex:1;min-width:120px}
+.bcat-vals{display:flex;gap:10px;align-items:center;flex-shrink:0}
+.bcat-vals span{font-family:var(--mono);font-size:11px;min-width:70px;text-align:right}
+
+/* Empty state */
+.empty-state{color:var(--text3);text-align:center;padding:30px 0;font-size:12px}
+
+hr.div{border:none;border-top:1px solid var(--border);margin:16px 0}
+
+/* Toolbar */
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.toolbar .spacer{flex:1}
+
+@media(max-width:700px){.g2.savings-grid{grid-template-columns:1fr}}
+
+/* Status dot */
+.sd{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:middle}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo"><span class="logo-dot"></span> FCC <span id="version-badge" style="font-size:9px;color:var(--text3);font-weight:400;letter-spacing:0"></span></div>
+  <div class="nav-tabs">
+    <button class="nav-tab active" data-page="dashboard">Dashboard</button>
+    <button class="nav-tab" data-page="cashflow">Cash Flow</button>
+    <button class="nav-tab" data-page="savings">Savings</button>
+    <button class="nav-tab" data-page="debt">Debt</button>
+    <button class="nav-tab" data-page="bills">Bills</button>
+    <button class="nav-tab" data-page="spending">Spending</button>
+    <button class="nav-tab" data-page="budget">Budget</button>
+    <button class="nav-tab" data-page="settings">⚙️ Settings</button>
+  </div>
+  <div class="topbar-right">
+    <!-- User auth pill -->
+    <div id="auth-pill" style="display:none;align-items:center;gap:6px">
+      <div id="sync-dot" style="width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0" title="Synced to cloud"></div>
+      <span id="auth-name" style="font-size:10px;color:var(--text2);max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:10px" onclick="signOut()">Sign out</button>
+    </div>
+  </div>
+</div>
+
+<!-- AUTH OVERLAY -->
+<div id="auth-overlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:2000;overflow-y:auto">
+  <div style="max-width:400px;margin:60px auto;padding:24px 16px;text-align:center">
+    <div style="font-size:48px;margin-bottom:16px">🏦</div>
+    <div style="font-size:24px;font-weight:700;letter-spacing:-0.5px;margin-bottom:8px">Financial Command Centre</div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:32px;line-height:1.6">Your personal finance command centre.<br>Sign in to sync your data across all devices.</div>
+    <button onclick="signInWithGoogle()" style="display:inline-flex;align-items:center;gap:12px;background:#fff;color:#1f1f1f;border:none;border-radius:8px;padding:14px 24px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.15);width:100%;max-width:280px;justify-content:center">
+      <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/><path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/><path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/><path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.3z"/></svg>
+      Sign in with Google
+    </button>
+    <div id="auth-error" style="margin-top:16px;font-size:12px;color:var(--red);display:none"></div>
+    <div style="margin-top:24px;font-size:11px;color:var(--text3);line-height:1.6">
+      Your data is stored securely in your personal Firebase account.<br>No one else can see it.
+    </div>
+  </div>
+</div>
+
+<div id="page-dashboard" class="page active"></div>
+<div id="page-cashflow" class="page"></div>
+<div id="page-savings" class="page"></div>
+<div id="page-debt" class="page"></div>
+<div id="page-bills" class="page"></div>
+<div id="page-spending" class="page"></div>
+<div id="page-budget" class="page"></div>
+<div id="page-settings" class="page"></div>
+
+<!-- ONBOARDING OVERLAY -->
+<div id="onboarding-overlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:1000;overflow-y:auto;padding:24px 16px">
+  <div style="max-width:480px;margin:0 auto">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-size:28px;margin-bottom:8px">👋</div>
+      <div style="font-size:20px;font-weight:700;letter-spacing:-0.5px">Welcome to FCC</div>
+      <div style="font-size:13px;color:var(--text2);margin-top:4px">Let's get you set up in 5 steps</div>
+    </div>
+    <div class="onboard-progress" id="onboard-progress"></div>
+    <div id="onboard-steps"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-body">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+/* ==========================================================================
+   STATE
+   ========================================================================== */
+/* BLANK state — what reset gives you */
+const DEFAULT_STATE = {
+  forecastEndYear: new Date().getFullYear() + 2,
+  openingBalance: 0,
+  transactions: [],
+  overrides: {},
+  checkpoints: {},
+  savingsPots: [],
+  debtCards: [],
+  debtBudgetOverride: null,
+  debtStrategy: 'snowball', // 'snowball' or 'avalanche'
+  bills: [],
+  spending: [],
+  budget: {},
+  settings: {
+    notificationsEnabled: false,
+    interestModellingEnabled: false,
+  }
+};
+
+/* YOUR data — only loaded on very first open (no localStorage yet).
+   After that, localStorage takes over and this block is ignored. */
+const INITIAL_DATA = {
+  forecastEndYear: new Date().getFullYear() + 2,
+  openingBalance: 0,
+  transactions: [],
+  overrides: {},
+  checkpoints: {},
+  savingsPots: [],
+  debtCards: [],
+  debtBudgetOverride: null,
+  debtStrategy: 'snowball',
+  bills: [],
+  spending: [],
+  budget: {},
+  settings: { notificationsEnabled: false, interestModellingEnabled: false }
+};
+
+const STORAGE_KEY = 'fcc_v5';
+
+// ── Firebase config ──
+// Replace these placeholder values with your actual Firebase project config
+// Get them from: Firebase Console → Project Settings → Your Apps → SDK setup
+const FIREBASE_CONFIG = {
+  apiKey:            "AIzaSyDM5K_gZ8PmGJMX7ILFFvEhEzId9Kg-fVc",
+  authDomain:        "financial-command-centre-c3d19.firebaseapp.com",
+  databaseURL:       "https://financial-command-centre-c3d19-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId:         "financial-command-centre-c3d19",
+  storageBucket:     "financial-command-centre-c3d19.firebasestorage.app",
+  messagingSenderId: "769537269678",
+  appId:             "1:769537269678:web:bd8ac50b40f16ab077723f"
+};
+
+// ── Firebase state ──
+let _fbApp = null, _fbAuth = null, _fbDb = null, _fbUser = null;
+let _firebaseReady = false;
+
+function initFirebase(){
+  try {
+    _fbApp  = firebase.initializeApp(FIREBASE_CONFIG);
+    _fbAuth = firebase.auth();
+    _fbDb   = firebase.database();
+    _firebaseReady = true;
+
+    // Listen for auth state changes
+    _fbAuth.onAuthStateChanged(async user => {
+      if (user){
+        _fbUser = user;
+        showAuthPill(user);
+        hideAuthOverlay();
+        await loadFromFirebase();
+        startApp();
+      } else {
+        _fbUser = null;
+        hideAuthPill();
+        showAuthOverlay();
+      }
+    });
+  } catch(e){
+    console.warn('Firebase init failed — falling back to localStorage', e);
+    _firebaseReady = false;
+    // Fall back to localStorage and start app directly
+    loadFromLocalStorage();
+    startApp();
+  }
+}
+
+function userDbPath(){ return `users/${_fbUser.uid}/fcc`; }
+
+async function loadFromFirebase(){
+  try {
+    setSyncDot('syncing');
+    // Read main data AND dedicated theme path in parallel
+    const [snap, themeSnap] = await Promise.all([
+      _fbDb.ref(userDbPath()).get(),
+      _fbDb.ref(userDbPath() + '_theme').get()
+    ]);
+    if (snap.exists()){
+      const data = snap.val();
+      Object.keys(S).forEach(k => delete S[k]);
+      Object.assign(S, { ...JSON.parse(JSON.stringify(DEFAULT_STATE)), ...data });
+      // Firebase strips null values — convert any missing override keys back to 0
+      // This handles legacy data where null was stored before this fix
+      if (S.overrides){
+        Object.keys(S.overrides).forEach(k => {
+          if (S.overrides[k] === null) S.overrides[k] = 0;
+        });
+      }
+    } else {
+      // First time this user — save initial state to Firebase
+      const init = JSON.parse(JSON.stringify(INITIAL_DATA));
+      Object.keys(S).forEach(k => delete S[k]);
+      Object.assign(S, init);
+      await _fbDb.ref(userDbPath()).set(S);
+    }
+    runMigrations();
+    invalidateFlow();
+    // Apply theme NOW — before startApp() runs — so there's no flash
+    try {
+      const fbTheme = themeSnap.exists() ? themeSnap.val() : (S.settings?.theme || null);
+      const lsTheme = localStorage.getItem(THEME_KEY);
+      const theme = fbTheme || lsTheme;
+      if (theme) applyTheme(theme, false);
+    } catch(e){}
+    setSyncDot('ok');
+  } catch(e){
+    console.warn('Firebase load failed', e);
+    setSyncDot('error');
+  }
+}
+
+// Debounced Firebase save — batches rapid saves into one write
+let _saveTimer = null;
+function saveToFirebase(){
+  if (!_firebaseReady || !_fbUser) return;
+  setSyncDot('syncing');
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await _fbDb.ref(userDbPath()).set(JSON.parse(JSON.stringify(S)));
+      setSyncDot('ok');
+    } catch(e){
+      console.warn('Firebase save failed', e);
+      setSyncDot('error');
+    }
+  }, 1000); // 1 second debounce
+}
+
+function setSyncDot(state){
+  const dot = document.getElementById('sync-dot');
+  if (!dot) return;
+  if (state === 'ok')      { dot.style.background = 'var(--green)'; dot.title = 'Synced to cloud'; }
+  if (state === 'syncing') { dot.style.background = 'var(--amber)'; dot.title = 'Saving…'; }
+  if (state === 'error')   { dot.style.background = 'var(--red)';   dot.title = 'Sync error — check connection'; }
+}
+
+function showAuthOverlay(){ document.getElementById('auth-overlay').style.display = 'block'; }
+function hideAuthOverlay(){ document.getElementById('auth-overlay').style.display = 'none'; }
+function showAuthPill(user){
+  const pill = document.getElementById('auth-pill');
+  const name = document.getElementById('auth-name');
+  if (pill) pill.style.display = 'flex';
+  if (name) name.textContent = user.displayName?.split(' ')[0] || user.email?.split('@')[0] || 'You';
+}
+function hideAuthPill(){
+  const pill = document.getElementById('auth-pill');
+  if (pill) pill.style.display = 'none';
+}
+
+async function signInWithGoogle(){
+  if (!_firebaseReady){ alert('Firebase not configured yet — see setup instructions in the code.'); return; }
+  try {
+    document.getElementById('auth-error').style.display = 'none';
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await _fbAuth.signInWithPopup(provider);
+    // onAuthStateChanged handles the rest
+  } catch(e){
+    const errEl = document.getElementById('auth-error');
+    if (errEl){ errEl.textContent = 'Sign in failed: ' + e.message; errEl.style.display = 'block'; }
+  }
+}
+
+async function signOut(){
+  if (!_firebaseReady) return;
+  if (!confirm('Sign out? Make sure you\'ve exported a backup first.')) return;
+  await _fbAuth.signOut();
+  // onAuthStateChanged will show auth overlay
+}
+
+// Load from localStorage (fallback when Firebase not configured)
+function loadFromLocalStorage(){
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw){
+      const init = JSON.parse(JSON.stringify(INITIAL_DATA));
+      Object.assign(S, init);
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(S)); } catch(e){}
+    } else {
+      const parsed = JSON.parse(raw);
+      const base = { ...JSON.parse(JSON.stringify(DEFAULT_STATE)), ...parsed, overrides: parsed.overrides||{}, checkpoints: parsed.checkpoints||{} };
+      if (!base.forecastEndYear && parsed.forecastYears) base.forecastEndYear = new Date().getFullYear() + parseInt(parsed.forecastYears);
+      Object.assign(S, base);
+    }
+    runMigrations();
+  } catch(e){
+    console.warn('LocalStorage load failed', e);
+    Object.assign(S, JSON.parse(JSON.stringify(DEFAULT_STATE)));
+  }
+}
+
+// S starts empty — filled by Firebase or localStorage before startApp()
+let S = {};
+
+function runMigrations(){
+  if (!S.transactions) S.transactions = [];
+  if (!S.bills) S.bills = [];
+  if (!S.savingsPots) S.savingsPots = [];
+  if (!S.debtCards) S.debtCards = [];
+  if (!S.overrides) S.overrides = {};
+  if (!S.checkpoints) S.checkpoints = {};
+  if (!S.settings) S.settings = { notificationsEnabled:false, interestModellingEnabled:false };
+  if (!S.debtStrategy) S.debtStrategy = 'snowball';
+  if (!S.debtBudgetOverride) S.debtBudgetOverride = null;
+  S.transactions.forEach(tx => {
+    if (tx.type === 'out') tx.type = 'spending';
+    if (!tx.hasOwnProperty('endDate')) tx.endDate = null;
+  });
+  S.bills.forEach(b => {
+    if (!b.startDate) b.startDate = '2000-01-01';
+    if (!b.hasOwnProperty('endDate')) b.endDate = null;
+  });
+  S.spending = S.spending || [];
+  S.spending.forEach(e => { if (!e.id) e.id = uid(); });
+  S.savingsPots.forEach(p => {
+    if (!p.anchorDate) p.anchorDate = fmtDate(today);
+    if (!p.withdrawals) p.withdrawals = [];
+    if (!p.hasOwnProperty('interestRate')) p.interestRate = 0;
+  });
+}
+
+function startApp(){
+  cfPage = 0;
+  // Theme is already applied by loadFromFirebase (Firebase path) or boot-time localStorage read.
+  // This is a fallback for the localStorage-only path (no Firebase).
+  try {
+    if (!document.documentElement.classList.contains('light')){
+      const lsTheme = localStorage.getItem(THEME_KEY);
+      if (lsTheme === 'light') applyTheme('light', false);
+    }
+  } catch(e){}
+  const isFirstTime = !S.settings?.onboardingComplete &&
+    S.transactions.length === 0 && S.debtCards.length === 0 && S.savingsPots.length === 0;
+  if (isFirstTime){ startOnboarding(); }
+  else {
+    renderDashboard();
+    if (S.settings?.notificationsEnabled && Notification.permission === 'granted'){
+      setTimeout(() => scheduleNotifications(), 2000);
+    }
+  }
+}
+
+/* ==========================================================================
+   FLOW CACHE — declared here so save() can safely call invalidateFlow()
+   ========================================================================== */
+let _flowCache = null;
+let _flowCacheKey = null;
+function invalidateFlow(){ _flowCache = null; _flowCacheKey = null; }
+function getFlow(){
+  const key = JSON.stringify({ t:S.transactions, ob:S.openingBalance, ov:S.overrides, cp:S.checkpoints, fy:S.forecastEndYear, b:S.bills });
+  if (_flowCache && _flowCacheKey === key) return _flowCache;
+  _flowCache = buildDailyFlow();
+  _flowCacheKey = key;
+  return _flowCache;
+}
+
+function save(){
+  invalidateFlow();
+  // Always save to localStorage as a local cache/fallback
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(S)); } catch(e){}
+  // Also save to Firebase if signed in
+  if (_firebaseReady && _fbUser) saveToFirebase();
+}
+
+/* ==========================================================================
+   DATE & UTIL HELPERS
+   ========================================================================== */
+const today = new Date(); today.setHours(0,0,0,0);
+function fmtDate(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function parseDate(s){ const [y,m,d]=s.split('-').map(Number); const dt=new Date(y,m-1,d); dt.setHours(0,0,0,0); return dt; }
+function addMonths(d,n){ const r=new Date(d.getFullYear(), d.getMonth()+n, 1); return r; }
+function isWeekday(d){ const w=d.getDay(); return w!==0&&w!==6; }
+
+// Run migrations on initial local load (Firebase load also calls this)
+runMigrations();
+function lastWorkingDay(year,month){
+  const d = new Date(year, month+1, 0);
+  while (!isWeekday(d)) d.setDate(d.getDate()-1);
+  return d;
+}
+const fmt = v => '£'+Math.abs(v).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmts = v => (v<0?'-':'')+fmt(v);
+function uid(){ return 'id'+Math.random().toString(36).slice(2,9); }
+function monthLabel(d){ return d.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}); }
+function dateLabel(d){ return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); }
+function cfDateLabel(d){ return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); }
+function ordinal(n){ const s=['th','st','nd','rd'],v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); }
+
+/* Override helpers */
+const ovKey = (date, txId) => `${date}__${txId}`;
+function getOverride(date, txId){
+  const k = ovKey(date, txId);
+  return S.overrides.hasOwnProperty(k) ? S.overrides[k] : undefined;
+}
+function setOverride(date, txId, amount){
+  S.overrides[ovKey(date,txId)] = amount;
+  save();
+}
+function clearOverride(date, txId){
+  delete S.overrides[ovKey(date,txId)];
+  save();
+}
+
+/* ==========================================================================
+   CASH FLOW ENGINE
+   - Generates daily projections from schedules
+   - Applies overrides (single-date cell edits)
+   - Applies checkpoints (balance anchors — recalculate forward)
+   ========================================================================== */
+const OUT_TYPES = ['spending','creditCard','loans','planned','bills','houseAccount',
+                   'jointSavings','emergencyFund','t212','personalSavings'];
+
+function buildDailyFlow(){
+  const startDate = new Date(today.getFullYear()-1, 0, 1);      // include last year for history
+  const endDate   = new Date(S.forecastEndYear, 11, 31);
+
+  // For each date, collect events: {txId, name, amount, type, isOverride}
+  const eventMap = {};
+  function push(dateStr, txId, name, amount, type, isOverride=false){
+    if (!eventMap[dateStr]) eventMap[dateStr] = [];
+    eventMap[dateStr].push({ txId, name, amount, type, isOverride });
+  }
+
+  S.transactions.forEach(tx => {
+    const txStart = parseDate(tx.startDate || fmtDate(today));
+    const txEnd   = tx.endDate ? parseDate(tx.endDate) : endDate;
+
+    if (tx.freq === 'once'){
+      const d = parseDate(tx.startDate);
+      if (d>=startDate && d<=endDate && d>=txStart && d<=txEnd){
+        const ov = getOverride(fmtDate(d), tx.id);
+        const amt = ov !== undefined ? ov : tx.amount;
+        if (amt !== null) push(fmtDate(d), tx.id, tx.name, amt, tx.type, ov!==undefined);
+      }
+    } else if (tx.freq === 'monthly'){
+      let m = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      while (m <= endDate){
+        const maxDay = new Date(m.getFullYear(), m.getMonth()+1, 0).getDate();
+        const day = Math.min(tx.dayOfMonth||1, maxDay);
+        const d = new Date(m.getFullYear(), m.getMonth(), day);
+        if (d>=txStart && d<=txEnd && d>=startDate && d<=endDate){
+          const ds = fmtDate(d);
+          const ov = getOverride(ds, tx.id);
+          const amt = ov !== undefined ? ov : tx.amount;
+          // null or 0 override = cancelled occurrence
+          if (amt !== null && amt !== 0) push(ds, tx.id, tx.name, amt, tx.type, ov!==undefined);
+        }
+        m = addMonths(m, 1);
+      }
+    } else if (tx.freq === 'lastwd'){
+      let m = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+      while (m <= endDate){
+        const d = lastWorkingDay(m.getFullYear(), m.getMonth());
+        if (d>=txStart && d<=txEnd && d>=startDate && d<=endDate){
+          const ds = fmtDate(d);
+          const ov = getOverride(ds, tx.id);
+          const amt = ov !== undefined ? ov : tx.amount;
+          // null or 0 override = cancelled occurrence
+          if (amt !== null && amt !== 0) push(ds, tx.id, tx.name, amt, tx.type, ov!==undefined);
+        }
+        m = addMonths(m, 1);
+      }
+    }
+  });
+
+  // Bills feed into the flow — monthly on due day, respecting startDate/endDate
+  S.bills.forEach(bill => {
+    if (!bill.due) return;
+    const billStart = parseDate(bill.startDate || '2000-01-01');
+    const billEnd   = bill.endDate ? parseDate(bill.endDate) : endDate;
+    let m = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+    while (m <= endDate){
+      const maxDay = new Date(m.getFullYear(), m.getMonth()+1, 0).getDate();
+      const day = Math.min(bill.due, maxDay);
+      const d = new Date(m.getFullYear(), m.getMonth(), day);
+      if (d >= billStart && d <= billEnd && d >= startDate && d <= endDate){
+        const ds = fmtDate(d);
+        const ov = getOverride(ds, bill.id);
+        const amt = ov !== undefined ? ov : bill.amount;
+        // null or 0 override = cancelled occurrence
+        if (amt !== null && amt !== 0) push(ds, bill.id, bill.name, amt, 'bills', ov!==undefined);
+      }
+      m = addMonths(m, 1);
+    }
+  });
+
+  // Build rows, walk balance forward, honouring checkpoints
+  const rows = [];
+  let runBal = S.openingBalance;
+
+  // Find the latest checkpoint date at-or-before startDate, if any
+  const checkpointDates = Object.keys(S.checkpoints).sort();
+  const cpBefore = checkpointDates.filter(d => parseDate(d) < startDate).pop();
+  if (cpBefore !== undefined) runBal = S.checkpoints[cpBefore];
+
+  let cur = new Date(startDate);
+  while (cur <= endDate){
+    const ds = fmtDate(cur);
+    const evts = eventMap[ds] || [];
+    const cols = { spending:0, creditCard:0, loans:0, planned:0, bills:0,
+                   houseAccount:0, jointSavings:0, emergencyFund:0, t212:0,
+                   personalSavings:0, moneyIn:0 };
+    let dayNet = 0;
+    evts.forEach(e => {
+      if (e.type === 'moneyIn'){ cols.moneyIn += e.amount; dayNet += e.amount; }
+      else {
+        const c = cols.hasOwnProperty(e.type) ? e.type : 'spending';
+        cols[c] += e.amount; dayNet -= e.amount;
+      }
+    });
+    runBal = +(runBal + dayNet).toFixed(2);
+
+    // Apply checkpoint override if this date has one (takes priority)
+    const cp = S.checkpoints[ds];
+    if (cp !== undefined) runBal = cp;
+
+    rows.push({ date:ds, dateObj:new Date(cur), cols, runBal, items:evts,
+                hasCheckpoint: cp !== undefined });
+    cur.setDate(cur.getDate()+1);
+  }
+  return rows;
+}
+
+function buildMonthlyMinBalances(flow){
+  const map = {};
+  flow.forEach(r => {
+    const k = r.date.slice(0,7);
+    if (map[k] === undefined || r.runBal < map[k]) map[k] = r.runBal;
+  });
+  return map;
+}
+
+/* ==========================================================================
+   ROUTING
+   ========================================================================== */
+let charts = {};
+document.querySelectorAll('.nav-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    const page = tab.dataset.page;
+    document.getElementById('page-'+page).classList.add('active');
+    renderPage(page);
+    window.scrollTo(0,0);
+  });
+});
+
+function renderAll(){ renderPage(document.querySelector('.nav-tab.active').dataset.page); }
+function renderPage(p){
+  if (p==='dashboard') renderDashboard();
+  else if (p==='cashflow') renderCashFlow();
+  else if (p==='savings') renderSavings();
+  else if (p==='debt') renderDebt();
+  else if (p==='bills') renderBills();
+  else if (p==='spending') renderSpending();
+  else if (p==='budget') renderBudget();
+  else if (p==='settings') renderSettings();
+}
+
+/* ==========================================================================
+   MODAL
+   ========================================================================== */
+function openModal(html){
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.add('open');
+  setTimeout(() => {
+    const first = document.querySelector('#modal-content input, #modal-content select, #modal-content button.choice');
+    if (first) first.focus();
+  }, 50);
+}
+function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); }
+document.getElementById('modal-overlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
+});
+
+/* ==========================================================================
+   DASHBOARD
+   ========================================================================== */
+function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function renderDashboard(){
+  const flow = getFlow();
+  const monthlyMins = buildMonthlyMinBalances(flow);
+  const todayRow = flow.find(r => r.date === fmtDate(today));
+  const currentBal = todayRow ? todayRow.runBal : S.openingBalance;
+
+  const totalSavings = S.savingsPots.reduce((s,p)=>s+computeLivePotBalance(p),0);
+  const totalDebt    = S.debtCards.reduce((s,c)=>s+c.balance,0);
+  const netWorth     = currentBal + totalSavings - totalDebt;
+
+  const curMonKey = fmtDate(today).slice(0,7);
+  const curMonMin = monthlyMins[curMonKey] !== undefined ? monthlyMins[curMonKey] : currentBal;
+
+  const balStatus = curMonMin < 250 ? ['red','🔴 Below £250 danger zone'] :
+                     curMonMin < 600 ? ['amber','🟡 Below £600 caution zone'] :
+                     ['green','🟢 Safe this month'];
+
+  const dfDate = computeDebtFreeDate();
+  const daysToFree = dfDate ? Math.ceil((dfDate-today)/86400000) : null;
+  const beDate = netWorth < 0 ? computeBreakevenDate(flow) : today;
+
+  const overrideCount = Object.keys(S.overrides).length;
+  const checkpointCount = Object.keys(S.checkpoints).length;
+
+  document.getElementById('page-dashboard').innerHTML = `
+<div class="sh">
+  <div>
+    <h2>Financial Command Centre</h2>
+    <p>${today.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})} · Forecast to ${S.forecastEndYear}</p>
+  </div>
+  <span class="badge b-${balStatus[0]}">${balStatus[1]}</span>
+</div>
+
+<div class="g4" style="margin-bottom:14px">
+  <div class="card">
+    <div class="kpi-label">Current Account</div>
+    <div class="kpi-value ${currentBal<250?'c-red':currentBal<600?'c-amber':'c-green'}">${fmt(currentBal)}</div>
+    <div class="kpi-sub">${checkpointCount>0?`⚓ ${checkpointCount} checkpoint${checkpointCount>1?'s':''}`:'Live projected balance'}</div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">Total Savings</div>
+    <div class="kpi-value c-green">${fmt(totalSavings)}</div>
+    <div class="kpi-sub">${S.savingsPots.length} pots</div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">Total Debt</div>
+    <div class="kpi-value c-red">${fmt(totalDebt)}</div>
+    <div class="kpi-sub">${S.debtCards.length} cards · excl. mortgage</div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">Net Worth</div>
+    <div class="kpi-value ${netWorth>=0?'c-green':'c-red'}">${fmts(netWorth)}</div>
+    <div class="kpi-sub">${netWorth<0?'⚠️ Negative — climbing':'✅ Positive'}</div>
+  </div>
+</div>
+
+<div id="dash-alerts"></div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label">⏳ Wealth Countdown</div>
+  <div class="countdown-grid">
+    <div class="cd-box">
+      <div class="cd-num">${daysToFree?daysToFree.toLocaleString():'—'}</div>
+      <div class="cd-label">Days to Debt Freedom</div>
+    </div>
+    <div class="cd-box">
+      <div class="cd-num" style="font-size:15px;color:var(--green)">${dfDate?dfDate.toLocaleDateString('en-GB',{month:'short',year:'numeric'}):'—'}</div>
+      <div class="cd-label">Debt Freedom Date</div>
+    </div>
+    <div class="cd-box">
+      <div class="cd-num" style="font-size:15px;color:var(--amber)">${beDate?beDate.toLocaleDateString('en-GB',{month:'short',year:'numeric'}):'—'}</div>
+      <div class="cd-label">Net Worth = £0</div>
+    </div>
+    <div class="cd-box">
+      <div class="cd-num ${curMonMin<250?'c-red':curMonMin<600?'c-amber':'c-green'}" style="font-size:18px">${fmt(curMonMin)}</div>
+      <div class="cd-label">Min Balance This Month</div>
+    </div>
+  </div>
+</div>
+
+<div class="g2" style="margin-bottom:14px">
+  <div class="card">
+    <div class="kpi-label">💾 Savings Milestones</div>
+    <div id="dash-milestones" style="margin-top:10px"></div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">📅 Monthly Min Balance (${today.getFullYear()})</div>
+    <div class="spark" id="dash-spark" style="margin-top:12px"></div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:4px" id="dash-spark-labels"></div>
+    <div class="kpi-label" style="margin-top:12px">Full Year Average</div>
+    <div class="kpi-value" id="dash-avg-bal" style="font-size:20px">—</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="sh" style="margin-bottom:10px">
+    <div class="kpi-label" style="margin:0">📈 Net Worth Trajectory · to ${S.forecastEndYear}</div>
+    <div style="font-size:10px;color:var(--text3)" id="nw-zero-note"></div>
+  </div>
+  <div class="chart-wrap tall"><canvas id="nw-chart"></canvas></div>
+</div>`;
+
+  // alerts
+  const al = [];
+  if (curMonMin < 250) al.push(['red',  `⚠️ Month min balance is <strong>${fmt(curMonMin)}</strong> — danger zone (&lt; £250).`]);
+  else if (curMonMin < 600) al.push(['amber',`📊 Month min balance <strong>${fmt(curMonMin)}</strong> — caution zone.`]);
+  const nextPayday = getNextPayday();
+  if (nextPayday){
+    const d = Math.ceil((nextPayday-today)/86400000);
+    if (d <= 7 && d >= 0) al.push(['blue', `💰 Payday in <strong>${d===0?'today':d+' day'+(d===1?'':'s')}</strong> · ${nextPayday.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})}.`]);
+  }
+  if (overrideCount > 0) al.push(['amber', `🟡 ${overrideCount} cell override${overrideCount>1?'s':''} active · tap amber dots in Cash Flow to review.`]);
+  document.getElementById('dash-alerts').innerHTML = al.map(([t,m])=>`<div class="alert al-${t}" style="color:var(--text)">${m}</div>`).join('');
+
+  // milestones
+  document.getElementById('dash-milestones').innerHTML = S.savingsPots.map(p => {
+    const liveBalance = computeLivePotBalance(p);
+    const pct = Math.min(liveBalance/p.target, 1);
+    const rem = Math.max(0, p.target - liveBalance);
+    const projection = computePotTargetDate(p, liveBalance, flow);
+    const est = projection ? projection.date : null;
+    const monthlyAvg = projection ? projection.monthlyAvg : 0;
+    return `<div class="prog-wrap" style="margin-bottom:12px">
+      <div class="prog-labels"><span>${p.name}</span><span class="mono">${fmt(liveBalance)} / ${fmt(p.target)}</span></div>
+      <div class="prog-bg"><div class="prog-fill" style="width:${(pct*100).toFixed(1)}%;background:${p.color||'var(--accent)'}"></div></div>
+      <div style="font-size:10px;color:var(--text3);margin-top:2px">${(pct*100).toFixed(1)}% · ${fmt(rem)} to go${est?` · Est. ${est.toLocaleDateString('en-GB',{month:'short',year:'numeric'})}`:''}</div>
+    </div>`;
+  }).join('');
+
+  // sparkline
+  const months12 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const sparVals = months12.map((_,i) => {
+    const k = `${today.getFullYear()}-${String(i+1).padStart(2,'0')}`;
+    return monthlyMins[k] !== undefined ? monthlyMins[k] : null;
+  });
+  const sparMax = Math.max(...sparVals.filter(v=>v!==null), 1);
+  const known = sparVals.filter(v=>v!==null);
+  const avg = known.length ? known.reduce((a,b)=>a+b,0)/known.length : 0;
+  document.getElementById('dash-avg-bal').textContent = fmt(avg);
+  document.getElementById('dash-spark').innerHTML = sparVals.map((v,i) => {
+    if (v === null) return `<div class="spark-b" style="height:4px;background:var(--border);opacity:0.4" title="${months12[i]}: no data"></div>`;
+    const h = Math.max((v/sparMax)*100, 5);
+    const col = v<250?'var(--red)':v<600?'var(--amber)':'var(--green)';
+    return `<div class="spark-b" style="height:${h}%;background:${col};opacity:0.8" title="${months12[i]}: ${fmt(v)}"></div>`;
+  }).join('');
+  document.getElementById('dash-spark-labels').innerHTML = months12.map(m => `<span>${m[0]}</span>`).join('');
+
+  // ── NET WORTH CHART (stacked, flow-aware savings) ──────────────────────────
+
+  const CF_TYPES_SAVINGS = Object.keys(POT_CF_KEYS);
+
+  // Pre-build a per-date savings delta map for dates >= today
+  const savingsByDate = {};
+  flow.forEach(r => {
+    if (r.dateObj < today) return;
+    const entry = {};
+    CF_TYPES_SAVINGS.forEach(cfType => {
+      if (r.cols[cfType]) entry[cfType] = r.cols[cfType];
+    });
+    if (Object.keys(entry).length) savingsByDate[r.date] = entry;
+  });
+
+  const yearsOut = S.forecastEndYear - today.getFullYear();
+  const stride = yearsOut <= 1 ? 1 : yearsOut <= 2 ? 3 : 7;
+  const debtMonthly = getMonthlyDebtBudget();
+
+  const nwLabels=[], nwCurrentAcct=[], nwSavings=[], nwDebt=[], nwTotal=[];
+
+  // Running savings deltas — accumulate as we walk forward
+  const runningSavings = {};
+  CF_TYPES_SAVINGS.forEach(k => { runningSavings[k] = 0; });
+
+  flow.filter(r => r.dateObj >= today).forEach((r, i) => {
+    // Accumulate savings deltas for every row (even non-sampled ones)
+    if (savingsByDate[r.date]){
+      Object.entries(savingsByDate[r.date]).forEach(([cfType, amt]) => {
+        runningSavings[cfType] = (runningSavings[cfType]||0) + amt;
+      });
+    }
+
+    if (i % stride !== 0) return; // only sample for chart points
+
+    const daysDiff = Math.round((r.dateObj-today)/86400000);
+    const monthsDiff = daysDiff/30.44;
+
+    // Project each pot: live balance today + scheduled contributions from flow AFTER today
+    const projSavingsTotal = S.savingsPots.reduce((sum, p) => {
+      const cfType = potCFType(p);
+      const contrib = cfType ? (runningSavings[cfType]||0) : 0;
+      return sum + Math.max(0, computeLivePotBalance(p) + contrib);
+    }, 0);
+
+    // Pots without a CF mapping still grow at their stated monthly rate
+    const unmappedMonthly = S.savingsPots.reduce((sum, p) => {
+      if (!potCFType(p) && p.monthly > 0) return sum + p.monthly;
+      return sum;
+    }, 0);
+    const projSavings = projSavingsTotal + unmappedMonthly * Math.max(0, monthsDiff);
+
+    const projDebt = Math.max(0, totalDebt - debtMonthly * Math.max(0, monthsDiff));
+    const nw = r.runBal + projSavings - projDebt;
+
+    nwLabels.push(monthsDiff < 3 ? dateLabel(r.dateObj) : monthLabel(r.dateObj));
+    nwCurrentAcct.push(+r.runBal.toFixed(2));
+    nwSavings.push(+projSavings.toFixed(2));
+    nwDebt.push(+(-projDebt).toFixed(2));
+    nwTotal.push(+nw.toFixed(2));
+  });
+
+  const firstPositive = nwTotal.findIndex(v => v >= 0);
+  const zn = document.getElementById('nw-zero-note');
+  if (firstPositive > 0 && nwTotal[0] < 0) zn.textContent = `Breakeven ~${nwLabels[firstPositive]}`;
+  else if (nwTotal[0] >= 0) zn.textContent = 'Already positive 🎉';
+
+  if (charts.nw) charts.nw.destroy();
+  charts.nw = new Chart(document.getElementById('nw-chart').getContext('2d'), {
+    type:'line',
+    data:{
+      labels:nwLabels,
+      datasets:[
+        {
+          label:'Net Worth',
+          data:nwTotal,
+          borderWidth:2,
+          pointRadius:0,
+          tension:0.2,
+          fill:false,
+          segment:{
+            borderColor: ctx => nwTotal[ctx.p1DataIndex]>=0 ? '#22d47e' : '#ff5470',
+          },
+          borderDash:[],
+          order:0,
+        },
+        {
+          label:'Current Account',
+          data:nwCurrentAcct,
+          borderWidth:1,
+          pointRadius:0,
+          tension:0.2,
+          fill:false,
+          borderColor:'rgba(79,142,247,0.7)',
+          backgroundColor:'rgba(79,142,247,0.05)',
+          borderDash:[4,3],
+          order:1,
+        },
+        {
+          label:'Savings',
+          data:nwSavings,
+          borderWidth:1,
+          pointRadius:0,
+          tension:0.2,
+          fill:false,
+          borderColor:'rgba(34,212,126,0.7)',
+          backgroundColor:'rgba(34,212,126,0.05)',
+          borderDash:[4,3],
+          order:2,
+        },
+        {
+          label:'Debt',
+          data:nwDebt,
+          borderWidth:1,
+          pointRadius:0,
+          tension:0.2,
+          fill:false,
+          borderColor:'rgba(255,84,112,0.7)',
+          backgroundColor:'rgba(255,84,112,0.05)',
+          borderDash:[4,3],
+          order:3,
+        },
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ display:true, position:'bottom', labels:{ boxWidth:10, font:{size:10}, color:cssVar('--chart-tick'), padding:12 } },
+        tooltip:{ callbacks:{ label:ctx => `${ctx.dataset.label}: ${fmts(ctx.raw)}` } }
+      },
+      scales:{
+        x:{grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--chart-tick'),font:{size:9},maxTicksLimit:20}},
+        y:{grid:{color:cssVar('--chart-grid')},ticks:{color:cssVar('--chart-tick'),font:{size:9},callback:v=>v>=1000||v<=-1000?'£'+Math.round(v/1000)+'k':fmts(v)}}
+      }
+    }
+  });
+}
+
+function getNextPayday(){
+  const salaryTxs = S.transactions.filter(t => t.freq==='lastwd' && t.type==='moneyIn');
+  if (!salaryTxs.length) return null;
+  let m = new Date(today.getFullYear(), today.getMonth(), 1);
+  for (let i=0; i<3; i++){
+    const d = lastWorkingDay(m.getFullYear(), m.getMonth());
+    if (d >= today) return d;
+    m = addMonths(m, 1);
+  }
+  return null;
+}
+
+function computeDebtFreeDate(){
+  const budget = getMonthlyDebtBudget();
+  const cards  = [...S.debtCards].sort((a,b) => a.balance - b.balance);
+  const plan   = runSnowball(budget, cards);
+  if (!plan.length) return null;
+  return addMonths(today, plan[plan.length-1].month + 1);
+}
+
+function computeBreakevenDate(flow){
+  const totalDebt   = S.debtCards.reduce((s,c)=>s+c.balance,0);
+  const debtMonthly = getMonthlyDebtBudget();
+  const POT_CF_MAP  = { jointSavings:'Joint Savings', emergencyFund:'Emergency Fund', t212:'T212 / Retirement', personalSavings:'Personal Savings' };
+  const potToCF = {};
+  S.savingsPots.forEach(p => {
+    for (const [cfType, potName] of Object.entries(POT_CF_MAP)){
+      if (p.name.toLowerCase().includes(potName.split(' ')[0].toLowerCase()) ||
+          potName.toLowerCase().includes(p.name.split(' ')[0].toLowerCase())){
+        potToCF[p.id] = cfType; break;
+      }
+    }
+  });
+  const runningSavings = {};
+  Object.keys(POT_CF_MAP).forEach(k => { runningSavings[k] = 0; });
+  for (const r of flow){
+    if (r.dateObj < today) continue;
+    Object.keys(POT_CF_MAP).forEach(cfType => {
+      if (r.cols[cfType]) runningSavings[cfType] = (runningSavings[cfType]||0) + r.cols[cfType];
+    });
+    const projSavings = S.savingsPots.reduce((sum, p) => {
+      const cfType = potToCF[p.id];
+      return sum + Math.max(0, p.balance + (cfType ? runningSavings[cfType]||0 : 0));
+    }, 0);
+    const unmappedMonthly = S.savingsPots.reduce((sum, p) => (!potToCF[p.id] && p.monthly > 0 ? sum + p.monthly : sum), 0);
+    const monthsDiff = (r.dateObj-today)/86400000/30.44;
+    const nw = r.runBal + projSavings + unmappedMonthly*monthsDiff - Math.max(0, totalDebt - debtMonthly*monthsDiff);
+    if (nw >= 0) return r.dateObj;
+  }
+  return null;
+}
+
+/* ==========================================================================
+   CASH FLOW — SPREADSHEET-STYLE
+   ========================================================================== */
+let cfPage = 0;
+const CF_PER_PAGE = 91;
+let kbFocus = null;  // {rowIndex, colKey}
+
+// Pot → CF type keyword mapping (must be defined before getCFCols)
+const POT_CF_KEYS = {
+  jointSavings:    ['joint'],
+  emergencyFund:   ['emergency','emerg'],
+  t212:            ['t212','retirement','invest'],
+  personalSavings: ['personal'],
+};
+
+/* Return the CF column type that best matches a pot name, or null */
+function potCFType(pot){
+  const name = pot.name.toLowerCase();
+  for (const [cfType, keywords] of Object.entries(POT_CF_KEYS)){
+    if (keywords.some(k => name.includes(k))) return cfType;
+  }
+  return null;
+}
+
+// Base CF columns — always shown
+const CF_COLS_BASE = [
+  { key:'moneyIn',      label:'Money In',   type:'moneyIn',      color:'var(--green)'  },
+  { key:'spending',     label:'Spending',   type:'spending',     color:'var(--red)'    },
+  { key:'creditCard',   label:'Credit Card',type:'creditCard',   color:'var(--red)'    },
+  { key:'loans',        label:'Loans',      type:'loans',        color:'var(--red)'    },
+  { key:'bills',        label:'Bills',      type:'bills',        color:'var(--red)'    },
+  { key:'houseAccount', label:'House Acct', type:'houseAccount', color:'var(--amber)'  },
+];
+
+// Savings CF column types in order
+const SAVINGS_CF_TYPES = ['jointSavings','emergencyFund','t212','personalSavings'];
+
+// Build dynamic CF_COLS — savings columns only appear if a pot maps to them
+// Label comes from the actual pot name
+function getCFCols(){
+  const savingsCols = [];
+  const seen = new Set();
+  SAVINGS_CF_TYPES.forEach(cfType => {
+    // Find a pot that maps to this CF type
+    const pot = S.savingsPots.find(p => potCFType(p) === cfType);
+    if (pot && !seen.has(cfType)){
+      seen.add(cfType);
+      // Shorten pot name for column header (max 10 chars)
+      const shortName = pot.name.length > 10 ? pot.name.slice(0,9)+'…' : pot.name;
+      savingsCols.push({ key:cfType, label:shortName, type:cfType, color:'var(--accent)' });
+    }
+  });
+  return [...CF_COLS_BASE, ...savingsCols];
+}
+
+// For backwards compat — static reference updated when needed
+let CF_COLS = getCFCols();
+
+function groupTxByName(){
+  const groups = {};
+  S.transactions.forEach(tx => {
+    const k = tx.name + '__' + tx.type;
+    if (!groups[k]) groups[k] = { name:tx.name, type:tx.type, versions:[] };
+    groups[k].versions.push(tx);
+  });
+  Object.values(groups).forEach(g => g.versions.sort((a,b) => a.startDate.localeCompare(b.startDate)));
+  return Object.values(groups);
+}
+
+/* ==========================================================================
+   CSV EXPORT / IMPORT
+   ========================================================================== */
+
+/* ---- EXPORT ---- */
+function downloadCashflowCSV(){
+  const flow = getFlow();
+  const windowStart = addMonths(today, -1);
+  const rows = flow.filter(r => r.dateObj >= windowStart);
+
+  const headers = ['Date','Day','Money In','Spending','Credit Card','Loans','Bills',
+    'House Acct','Joint Sav','Emerg Fund','T212','Personal','Balance',
+    'Notes (leave blank or enter an amount to override)'];
+
+  const csvRows = [headers];
+
+  rows.forEach(r => {
+    const c = r.cols;
+    const dayName = r.dateObj.toLocaleDateString('en-GB',{weekday:'short'});
+    const isToday = r.date === fmtDate(today) ? 'TODAY' : '';
+    csvRows.push([
+      r.dateObj.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'}),
+      dayName + (isToday ? ' *TODAY*' : ''),
+      c.moneyIn        || '',
+      c.spending       || '',
+      c.creditCard     || '',
+      c.loans          || '',
+      c.bills          || '',
+      c.houseAccount   || '',
+      c.jointSavings   || '',
+      c.emergencyFund  || '',
+      c.t212           || '',
+      c.personalSavings|| '',
+      r.runBal.toFixed(2),
+      '' // notes/override column — blank on export, used on import
+    ]);
+  });
+
+  const csv = csvRows.map(row =>
+    row.map(v => {
+      const s = String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n')
+        ? '"' + s.replace(/"/g,'""') + '"'
+        : s;
+    }).join(',')
+  ).join('\r\n');
+
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cashflow_${fmtDate(today)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ---- IMPORT ---- */
+function uploadCashflowCSV(input){
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const text = e.target.result;
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) throw new Error('File appears empty.');
+
+      function parseCSVLine(line){
+        const result = []; let cur = ''; let inQ = false;
+        for (let i=0; i<line.length; i++){
+          const ch = line[i];
+          if (ch==='"'){ if(inQ && line[i+1]==='"'){ cur+='"'; i++; } else inQ=!inQ; }
+          else if (ch===',' && !inQ){ result.push(cur.trim()); cur=''; }
+          else cur+=ch;
+        }
+        result.push(cur.trim());
+        return result;
+      }
+
+      function normaliseDate(raw){
+        raw = (raw||'').trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+        const m = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+        if (m) return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
+        return null;
+      }
+
+      const header = parseCSVLine(lines[0]).map(h=>h.toLowerCase());
+      const dateIdx  = header.findIndex(h=>h==='date');
+      const notesIdx = header.findIndex(h=>h.includes('notes')||h.includes('override'));
+
+      if (dateIdx === -1) throw new Error('CSV must have a "Date" column.');
+
+      const colDefs = [
+        { match:'money in',    txType:'moneyIn'        },
+        { match:'spending',    txType:'spending'       },
+        { match:'credit card', txType:'creditCard'     },
+        { match:'loans',       txType:'loans'          },
+        { match:'bills',       txType:'bills'          },
+        { match:'house acct',  txType:'houseAccount'   },
+        { match:'joint sav',   txType:'jointSavings'   },
+        { match:'emerg fund',  txType:'emergencyFund'  },
+        { match:'t212',        txType:'t212'           },
+        { match:'personal',    txType:'personalSavings'},
+      ];
+
+      const colIndexMap = [];
+      header.forEach((h, ci) => {
+        const def = colDefs.find(d => h.includes(d.match));
+        if (def) colIndexMap.push({ ci, txType: def.txType, label: h });
+      });
+
+      if (colIndexMap.length === 0) throw new Error('No recognised data columns found.');
+
+      // Build a FRESH flow map before we touch anything
+      invalidateFlow();
+      const flow = getFlow();
+      const flowMap = {};
+      flow.forEach(r => { flowMap[r.date] = r; });
+
+      // First pass — collect all the CSV data into a clean structure
+      // { date -> { txType -> amount } }
+      const csvData = {};
+      const csvNotes = {};
+      let skipped = 0;
+
+      lines.slice(1).forEach(line => {
+        if (!line.trim()) return;
+        const cols = parseCSVLine(line);
+        const isoDate = normaliseDate(cols[dateIdx]);
+        if (!isoDate){ skipped++; return; }
+
+        if (!csvData[isoDate]) csvData[isoDate] = {};
+
+        colIndexMap.forEach(({ ci, txType }) => {
+          const val = (cols[ci]||'').replace(/[£,\s]/g,'');
+          if (!val) return;
+          const amount = parseFloat(val);
+          if (isNaN(amount) || amount === 0) return;
+          // Only keep first non-zero value per date+type (prevents duplication)
+          if (csvData[isoDate][txType] === undefined) {
+            csvData[isoDate][txType] = amount;
+          }
+        });
+
+        if (notesIdx !== -1){
+          const note = (cols[notesIdx]||'').replace(/[£,\s]/g,'');
+          const noteVal = parseFloat(note);
+          if (!isNaN(noteVal)) csvNotes[isoDate] = noteVal;
+        }
+      });
+
+      // Second pass — apply changes
+      let overridesAdded = 0, oneOffAdded = 0, matchedExact = 0;
+
+      Object.entries(csvData).forEach(([isoDate, typeAmounts]) => {
+        Object.entries(typeAmounts).forEach(([txType, amount]) => {
+          const dayRow = flowMap[isoDate];
+          const matchingEvt = dayRow?.items.find(ev => ev.type === txType);
+
+          if (matchingEvt){
+            // A scheduled transaction already covers this slot
+            if (Math.abs(amount - matchingEvt.amount) > 0.005){
+              // Amount differs — create override
+              setOverride(isoDate, matchingEvt.txId, amount);
+              overridesAdded++;
+            } else {
+              // Amount matches exactly — nothing to do
+              matchedExact++;
+            }
+          } else {
+            // No scheduled transaction for this date/type — check if we already
+            // added a one-off for this type on this date (from a previous import)
+            const alreadyExists = S.transactions.some(t =>
+              t.freq === 'once' && t.startDate === isoDate && t.type === txType
+            );
+            if (!alreadyExists){
+              S.transactions.push({ id:uid(), name: txType.replace(/([A-Z])/g,' $1').trim(),
+                amount, type:txType, freq:'once',
+                startDate:isoDate, endDate:null, dayOfMonth:null, category:txType });
+              oneOffAdded++;
+            }
+          }
+        });
+      });
+
+      // Apply checkpoints
+      Object.entries(csvNotes).forEach(([d, v]) => { S.checkpoints[d] = v; });
+
+      save(); refreshCFInPlace();
+
+      const parts = ['✅ Import complete!'];
+      if (overridesAdded > 0) parts.push(`• ${overridesAdded} amount override${overridesAdded>1?'s':''} applied (values differed from schedule)`);
+      if (oneOffAdded > 0)    parts.push(`• ${oneOffAdded} one-off transaction${oneOffAdded>1?'s':''} added (no matching schedule)`);
+      if (matchedExact > 0)   parts.push(`• ${matchedExact} entry${matchedExact>1?'s':''} matched schedule exactly — no change needed`);
+      if (skipped > 0)        parts.push(`• ${skipped} row${skipped>1?'s':''} skipped (unreadable date)`);
+      if (Object.keys(csvNotes).length > 0) parts.push(`• ${Object.keys(csvNotes).length} balance checkpoint${Object.keys(csvNotes).length>1?'s':''} set from Notes column`);
+      if (overridesAdded===0 && oneOffAdded===0) parts.push('• No new changes — your schedule already matches the CSV.');
+      alert(parts.join('\n'));
+
+    } catch(err){ alert('Import failed: ' + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+
+/* Remove duplicate one-off transactions created by bad imports */
+function cleanupDuplicateOneOffs(){
+  // Show a clear menu of what to remove
+  openModal(`
+    <h3>🧹 Clean Up Imported Transactions</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+      Choose what to remove. Use this to fix a bad import.
+    </p>
+
+    <button class="choice" onclick="cleanupOneOffsByType('moneyIn')">
+      <div class="choice-title" style="color:var(--green)">Remove all imported Money In one-offs</div>
+      <div class="choice-desc">Deletes every one-off salary/income entry. Safe if your salary is set up as a recurring schedule.</div>
+    </button>
+
+    <button class="choice" onclick="cleanupAllOneOffs()">
+      <div class="choice-title" style="color:var(--amber)">Remove ALL one-off transactions</div>
+      <div class="choice-desc">Wipes every single one-off of any type. Keeps your recurring schedules intact.</div>
+    </button>
+
+    <button class="choice" onclick="cleanupRedundantOneOffs()">
+      <div class="choice-title">Remove one-offs already covered by a recurring schedule</div>
+      <div class="choice-desc">Smarter cleanup — only removes one-offs where a recurring transaction already fires on the same date and type.</div>
+    </button>
+
+    <div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  `);
+}
+
+function cleanupOneOffsByType(txType){
+  const before = S.transactions.length;
+  S.transactions = S.transactions.filter(t => !(t.freq === 'once' && t.type === txType));
+  const removed = before - S.transactions.length;
+  save(); closeModal(); refreshCFInPlace();
+  alert(`✅ Removed ${removed} one-off "${txType}" transaction${removed!==1?'s':''}. Schedule is now clean.`);
+}
+
+function cleanupAllOneOffs(){
+  const before = S.transactions.length;
+  S.transactions = S.transactions.filter(t => t.freq !== 'once');
+  const removed = before - S.transactions.length;
+  save(); closeModal(); refreshCFInPlace();
+  alert(`✅ Removed ${removed} one-off transaction${removed!==1?'s':''}. Only recurring schedules remain.`);
+}
+
+function cleanupRedundantOneOffs(){
+  const before = S.transactions.length;
+  const recurringCovered = new Set();
+  const recurringTxs = S.transactions.filter(t => t.freq !== 'once');
+  const scanStart = new Date(today.getFullYear() - 1, 0, 1);
+  const scanEnd   = new Date((S.forecastEndYear || today.getFullYear() + 3), 11, 31);
+
+  recurringTxs.forEach(tx => {
+    const txStart = tx.startDate ? parseDate(tx.startDate) : scanStart;
+    const txEnd   = tx.endDate   ? parseDate(tx.endDate)   : scanEnd;
+    if (tx.freq === 'monthly') {
+      let m = new Date(scanStart.getFullYear(), scanStart.getMonth(), 1);
+      while (m <= scanEnd) {
+        const maxDay = new Date(m.getFullYear(), m.getMonth()+1, 0).getDate();
+        const d = new Date(m.getFullYear(), m.getMonth(), Math.min(tx.dayOfMonth||1, maxDay));
+        if (d >= txStart && d <= txEnd) recurringCovered.add(fmtDate(d)+'__'+tx.type);
+        m = addMonths(m, 1);
+      }
+    } else if (tx.freq === 'lastwd') {
+      let m = new Date(scanStart.getFullYear(), scanStart.getMonth(), 1);
+      while (m <= scanEnd) {
+        const d = lastWorkingDay(m.getFullYear(), m.getMonth());
+        if (d >= txStart && d <= txEnd) recurringCovered.add(fmtDate(d)+'__'+tx.type);
+        m = addMonths(m, 1);
+      }
+    }
+  });
+
+  const seen = new Set();
+  S.transactions = S.transactions.filter(t => {
+    if (t.freq !== 'once') return true;
+    const key = t.startDate+'__'+t.type;
+    if (recurringCovered.has(key)) return false;
+    if (seen.has(key+'__'+t.amount)) return false;
+    seen.add(key+'__'+t.amount);
+    return true;
+  });
+
+  const removed = before - S.transactions.length;
+  save(); closeModal(); refreshCFInPlace();
+  alert(removed > 0
+    ? `✅ Removed ${removed} redundant one-off${removed!==1?'s':''} already covered by recurring schedules.`
+    : 'Nothing removed — no redundant one-offs found. Try "Remove all one-offs" instead.');
+}
+
+function renderCashFlow(){
+  CF_COLS = getCFCols(); // refresh dynamic savings columns
+  const el = document.getElementById('page-cashflow');
+  el.innerHTML = `
+<div class="sh">
+  <div>
+    <h2>💰 Cash Flow</h2>
+    <p>Tap any amount or balance to edit · <span class="sd" style="background:var(--amber)"></span>override · <span class="sd" style="background:var(--purple)"></span>checkpoint</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <button class="btn btn-primary btn-sm" onclick="openTxModal()">＋ New Schedule</button>
+    <button class="btn btn-ghost btn-sm" onclick="openOverridesModal()">Overrides (${Object.keys(S.overrides).length})</button>
+    <button class="btn btn-ghost btn-sm" onclick="openCheckpointsModal()">⚓ Checkpoints (${Object.keys(S.checkpoints).length})</button>
+    <div style="width:1px;height:20px;background:var(--border);margin:0 2px"></div>
+    <button class="btn btn-ghost btn-sm" onclick="downloadCashflowCSV()" title="Download cashflow as CSV">⬇ Export CSV</button>
+    <label class="btn btn-ghost btn-sm" style="cursor:pointer" title="Upload cashflow CSV">⬆ Import CSV<input type="file" accept=".csv" style="display:none" onchange="uploadCashflowCSV(this)"></label>
+    <button class="btn btn-ghost btn-sm" onclick="if(confirm('Remove duplicate one-off transactions from previous imports?'))cleanupDuplicateOneOffs()" title="Clean up duplicate transactions from bad imports" style="color:var(--amber)">🧹 Cleanup</button>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:12px">
+  <div class="toolbar">
+    <div>
+      <div style="font-size:10px;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.1em">Opening Balance</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+        <input type="number" id="ob-input" value="${S.openingBalance}" style="width:110px;padding:6px 8px;font-size:12px" step="0.01">
+        <button class="btn btn-ghost btn-sm" onclick="setOB()">Set</button>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost btn-sm" onclick="cfNav(-1)" id="cf-prev">◀</button>
+    <span class="range-label" id="cf-range-label"></span>
+    <button class="btn btn-ghost btn-sm" onclick="cfNav(1)" id="cf-next">▶</button>
+    <button class="btn btn-ghost btn-sm" onclick="jumpToToday()">Today</button>
+  </div>
+</div>
+
+<div class="ss-wrap">
+  <div class="ss-scroll" id="ss-scroll">
+    <table class="ss" id="ss-table">
+      <thead><tr>
+        <th class="date-cell">Date</th>
+        ${CF_COLS.map(c => `<th style="color:${c.color}">${c.label}</th>`).join('')}
+        <th>Balance</th>
+        <th style="text-align:center">⚡</th>
+      </tr></thead>
+      <tbody id="cf-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="legend-row">
+  <div><span class="legend-dot" style="background:var(--amber)"></span>Cell override (tap to revert)</div>
+  <div><span class="legend-dot" style="background:var(--purple)"></span>Balance checkpoint (reconciled to bank)</div>
+  <div style="margin-left:auto">💡 Desktop: Tab/Enter/Arrows to navigate · Esc to cancel</div>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <div class="sh" style="margin-bottom:10px">
+    <div>
+      <div class="kpi-label">Scheduled Transactions</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">Recurring rules · edit for permanent changes (pay rise, new bill)</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" id="toggle-oneoffs-btn" onclick="toggleOneOffsVisible()" style="flex-shrink:0">Show one-offs</button>
+  </div>
+  <div id="tx-schedule-table"></div>
+</div>`;
+
+  renderCFTable();
+  renderTxScheduleTable();
+  document.getElementById('ob-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') setOB();
+  });
+}
+
+function setOB(){
+  const v = parseFloat(document.getElementById('ob-input').value);
+  if (!isNaN(v)){ S.openingBalance = v; save(); refreshCFInPlace(); }
+}
+
+function cfNav(dir){ cfPage += dir; if (cfPage<0) cfPage=0; renderCFTable(); }
+function jumpToToday(){
+  const flow = getFlow();
+  // Only count from today's slice window
+  const todayFlow = flow.filter(r => r.dateObj >= addMonths(today,-1));
+  cfPage = 0;
+  renderCFTable();
+  setTimeout(() => {
+    const el = document.querySelector('tr.today-row');
+    if (el) el.scrollIntoView({ behavior:'smooth', block:'center' });
+  }, 100);
+}
+
+// Refresh CF table in-place preserving scroll position
+function refreshCFInPlace(){
+  const scroller = document.getElementById("ss-scroll");
+  const savedTop  = scroller ? scroller.scrollTop  : 0;
+  const savedLeft = scroller ? scroller.scrollLeft : 0;
+  invalidateFlow();
+  renderCFTable();
+  renderTxScheduleTable();
+  document.querySelectorAll("#page-cashflow .btn-ghost").forEach(btn => {
+    if(btn.textContent.startsWith("Overrides")) btn.textContent = "Overrides ("+Object.keys(S.overrides).length+")";
+    if(btn.textContent.startsWith("2693 Checkpoints")) btn.textContent = "2693 Checkpoints ("+Object.keys(S.checkpoints).length+")";
+  });
+  if(scroller){ scroller.scrollTop = savedTop; scroller.scrollLeft = savedLeft; }
+}
+
+function renderCFTable(){
+  CF_COLS = getCFCols();
+  const flow = getFlow();
+  // Only show from one month before today onwards
+  const windowStart = addMonths(today, -1);
+  const visible = flow.filter(r => r.dateObj >= windowStart);
+  const total = visible.length;
+  const maxPage = Math.max(0, Math.ceil(total/CF_PER_PAGE)-1);
+  if (cfPage > maxPage) cfPage = maxPage;
+
+  const slice = visible.slice(cfPage*CF_PER_PAGE, (cfPage+1)*CF_PER_PAGE);
+  document.getElementById('cf-range-label').textContent =
+    slice.length ? `${cfDateLabel(slice[0].dateObj)} → ${cfDateLabel(slice[slice.length-1].dateObj)}` : '';
+  document.getElementById('cf-prev').disabled = cfPage === 0;
+  document.getElementById('cf-next').disabled = cfPage >= maxPage;
+
+  const todStr = fmtDate(today);
+
+  const rowsHtml = slice.map((r, visIdx) => {
+    const globalIdx = cfPage*CF_PER_PAGE + visIdx;
+    const isToday = r.date === todStr;
+    const isPast = r.dateObj < today;
+    const isWeekStart = r.dateObj.getDay() === 1;
+    const isWeekend = r.dateObj.getDay() === 0 || r.dateObj.getDay() === 6;
+    const c = r.cols;
+    const balCls = r.runBal < 250 ? 'c-red' : r.runBal < 600 ? 'c-amber' : 'c-green';
+
+    // For each column, check if there's a transaction scheduled for this date
+    // and render the cell as editable if so.
+    const colCells = CF_COLS.map(col => {
+      // find events that match this column's type
+      const evts = r.items.filter(e => {
+        if (col.type === 'moneyIn') return e.type === 'moneyIn';
+        return e.type === col.type;
+      });
+      if (!evts.length) {
+        // empty cell — could allow ad-hoc entry by tap
+        return `<td class="ec ec-empty" data-date="${r.date}" data-col="${col.key}" data-action="add">＋</td>`;
+      }
+      // Sum of events in this column (usually 1, but could be multiple)
+      const sum = evts.reduce((s,e) => s+e.amount, 0);
+      const hasOverride = evts.some(e => e.isOverride);
+      // single event: wire up click; multi: still clickable but opens a picker
+      if (evts.length === 1) {
+        const e = evts[0];
+        return `<td class="ec ${hasOverride?'has-override':''} mono" style="color:${col.color}"
+                    data-date="${r.date}" data-tx-id="${e.txId}" data-col="${col.key}"
+                    data-amount="${e.amount}" data-action="edit"
+                    title="${e.name}">${fmt(sum)}</td>`;
+      }
+      return `<td class="ec ${hasOverride?'has-override':''} mono" style="color:${col.color}"
+                  data-date="${r.date}" data-col="${col.key}" data-action="multi"
+                  title="${evts.map(e=>e.name).join(', ')}">${fmt(sum)}</td>`;
+    }).join('');
+
+    const statusIcon = r.items.length
+      ? (r.runBal<250 ? '🔴' : r.runBal<600 ? '🟡' : '🟢')
+      : '';
+
+    return `<tr class="${isToday?'today-row':''} ${isPast&&!r.items.length?'past-row':''} ${isWeekStart?'week-start':''} ${isWeekend?'weekend-row':''}" data-row-idx="${globalIdx}">
+      <td class="date-cell">
+        <div><span class="mono" style="font-size:11px;font-weight:600">${dateLabel(r.dateObj)}</span>${isToday?'<span class="today-badge">TODAY</span>':''}</div>
+        <div class="date-cell-day">${r.dateObj.toLocaleDateString('en-GB',{weekday:'short'})}</div>
+      </td>
+      ${colCells}
+      <td class="ec bal-cell ${balCls} ${r.hasCheckpoint?'is-checkpoint':''} mono"
+          data-date="${r.date}" data-col="balance" data-action="balance">${r.runBal<0?'−'+fmt(r.runBal):fmt(r.runBal)}</td>
+      <td style="text-align:center;font-size:14px">${statusIcon}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('cf-tbody').innerHTML = rowsHtml;
+  bindCellHandlers();
+}
+
+function bindCellHandlers(){
+  document.querySelectorAll('#cf-tbody .ec').forEach(cell => {
+    cell.addEventListener('click', onCellClick);
+  });
+  // Keyboard nav
+  document.addEventListener('keydown', handleKbNav);
+}
+
+function handleKbNav(e){
+  if (document.querySelector('input.ss-edit')) return;  // editing → let input handle
+  const active = document.activeElement;
+  if (!active || !active.classList || !active.classList.contains('ec')) return;
+
+  let row = active.parentElement;
+  let cells = Array.from(row.children).filter(c => c.classList.contains('ec'));
+  let colIdx = cells.indexOf(active);
+  if (colIdx === -1) return;
+
+  let targetRow = row;
+  if (e.key === 'ArrowDown' || e.key === 'Enter') targetRow = row.nextElementSibling;
+  else if (e.key === 'ArrowUp') targetRow = row.previousElementSibling;
+
+  if (targetRow && targetRow !== row){
+    const tCells = Array.from(targetRow.children).filter(c => c.classList.contains('ec'));
+    if (tCells[colIdx]){
+      e.preventDefault();
+      tCells[colIdx].focus();
+    }
+  } else if (e.key === 'ArrowRight' || e.key === 'Tab'){
+    if (cells[colIdx+1]){ e.preventDefault(); cells[colIdx+1].focus(); }
+  } else if (e.key === 'ArrowLeft'){
+    if (cells[colIdx-1]){ e.preventDefault(); cells[colIdx-1].focus(); }
+  } else if (e.key === 'F2' || e.key === ' '){
+    e.preventDefault();
+    active.click();
+  }
+}
+
+// make .ec focusable
+document.addEventListener('DOMContentLoaded', () => {
+  const style = document.createElement('style');
+  style.textContent = '.ec{outline:none} .ec:focus{box-shadow:inset 0 0 0 2px var(--accent);background:var(--accent-glow)!important;z-index:6}';
+  document.head.appendChild(style);
+});
+
+function onCellClick(e){
+  const cell = e.currentTarget;
+  const action = cell.dataset.action;
+  const date = cell.dataset.date;
+
+  if (action === 'edit') {
+    openEditChoiceModal(cell);
+  } else if (action === 'multi') {
+    openMultiEventModal(cell);
+  } else if (action === 'balance') {
+    openBalanceCheckpointModal(cell);
+  } else if (action === 'add') {
+    openAdhocAddModal(cell);
+  }
+}
+
+/* ---------- EDIT CHOICE MODAL ---------- */
+function openEditChoiceModal(cell){
+  const date = cell.dataset.date;
+  const txId = cell.dataset.txId;
+  const colKey = cell.dataset.col;
+  const currentAmount = parseFloat(cell.dataset.amount);
+  const tx = S.transactions.find(t => t.id === txId);
+  if (!tx) return;
+
+  const hasOverride = getOverride(date, txId) !== undefined;
+  const isOneOff = tx.freq === 'once';
+  const nice = parseDate(date).toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'long',year:'numeric'});
+
+  openModal(`
+    <h3>Edit "${tx.name}" · ${dateLabel(parseDate(date))}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">${nice} · Current: <strong class="mono">${fmt(currentAmount)}</strong>${hasOverride?' <span class="badge b-amber" style="margin-left:4px">OVERRIDE</span>':''}</p>
+
+    ${isOneOff ? `
+    <div class="fg">
+      <label>New Amount (£)</label>
+      <input type="number" id="ec-amount" value="${currentAmount}" step="0.01" inputmode="decimal" autofocus>
+    </div>
+    <p style="font-size:11px;color:var(--text3);margin:14px 0 8px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">Actions</p>
+    <button class="choice rec" onclick="applyEdit_once('${date}','${txId}')">
+      <div class="choice-title">Update amount</div>
+      <div class="choice-desc">Change the amount for this one-off transaction.</div>
+    </button>
+    <button class="choice" onclick="deleteOneOff('${txId}')" style="border-color:var(--red)">
+      <div class="choice-title" style="color:var(--red)">Delete this transaction</div>
+      <div class="choice-desc">Remove it entirely — no override left behind.</div>
+    </button>
+    ` : `
+    <div class="fg">
+      <label>New Amount (£)</label>
+      <input type="number" id="ec-amount" value="${currentAmount}" step="0.01" inputmode="decimal" autofocus>
+    </div>
+
+    <p style="font-size:11px;color:var(--text3);margin:14px 0 8px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">How should this change apply?</p>
+
+    <button class="choice rec" onclick="applyEdit_once('${date}','${txId}')">
+      <div class="choice-title">Just this occurrence</div>
+      <div class="choice-desc">Only ${dateLabel(parseDate(date))} changes. Perfect for overtime, bonuses, one-off adjustments. Schedule stays the same.</div>
+    </button>
+
+    <button class="choice" onclick="applyEdit_fromDate('${date}','${txId}')">
+      <div class="choice-title">From this date forward</div>
+      <div class="choice-desc">New rate from ${dateLabel(parseDate(date))} onwards. Use for pay rises, bill increases, price changes. Past records unaffected.</div>
+    </button>
+
+    ${hasOverride ? `<button class="choice" onclick="revertOverride('${date}','${txId}')" style="border-color:var(--amber)">
+      <div class="choice-title" style="color:var(--amber)">Revert to scheduled amount (${fmt(tx.amount)})</div>
+      <div class="choice-desc">Remove this override and go back to the scheduled ${fmt(tx.amount)}.</div>
+    </button>` : ''}
+
+    <button class="choice" onclick="cancelOccurrence('${date}','${txId}')" style="border-color:var(--red)">
+      <div class="choice-title" style="color:var(--red)">Cancel this occurrence</div>
+      <div class="choice-desc">Skip this one date entirely (e.g. holiday means no payment this month).</div>
+    </button>
+    `}
+
+    <div class="form-actions" style="margin-top:12px">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function applyEdit_once(date, txId){
+  const amt = parseFloat(document.getElementById('ec-amount').value);
+  if (isNaN(amt)) return alert('Enter a valid amount.');
+  setOverride(date, txId, amt);
+  closeModal(); refreshCFInPlace();
+}
+
+function applyEdit_fromDate(date, txId){
+  const amt = parseFloat(document.getElementById('ec-amount').value);
+  if (isNaN(amt) || amt <= 0) return alert('Enter a valid amount.');
+  const tx = S.transactions.find(t => t.id === txId);
+  if (!tx) return;
+  // End the current version at date-1, create new version from date
+  const startD = parseDate(date);
+  const prevEnd = new Date(startD); prevEnd.setDate(prevEnd.getDate()-1);
+  tx.endDate = fmtDate(prevEnd);
+  const newTx = { ...tx, id:uid(), amount:amt, startDate:date, endDate:null };
+  S.transactions.push(newTx);
+  // Also clear any existing override on this exact date for the new tx
+  save(); closeModal(); refreshCFInPlace();
+}
+
+function revertOverride(date, txId){ clearOverride(date, txId); closeModal(); refreshCFInPlace(); }
+function cancelOccurrence(date, txId){
+  // Use 0 instead of null — Firebase strips null values on save/load
+  // The flow engine treats 0 as "cancelled" (same as null override)
+  setOverride(date, txId, 0);
+  closeModal();
+  refreshCFInPlace();
+}
+
+/* ---------- MULTI EVENT MODAL ---------- */
+function openMultiEventModal(cell){
+  const date = cell.dataset.date;
+  const colKey = cell.dataset.col;
+  const flow = getFlow();
+  const row = flow.find(r => r.date === date);
+  if (!row) return;
+  const evts = row.items.filter(e => e.type === colKey);
+  openModal(`
+    <h3>Multiple events · ${dateLabel(parseDate(date))}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Pick which one to edit:</p>
+    ${evts.map(e => `<button class="choice" onclick="pickMultiEvent('${date}','${e.txId}','${e.amount}')">
+      <div class="choice-title">${e.name}</div>
+      <div class="choice-desc mono">${fmt(e.amount)}${e.isOverride?' (overridden)':''}</div>
+    </button>`).join('')}
+    <div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>
+  `);
+}
+function pickMultiEvent(date, txId, amount){
+  closeModal();
+  // Build a synthetic cell-like object for the edit modal
+  const fakeCell = { dataset: { date, txId, col:'', amount } };
+  setTimeout(() => openEditChoiceModal(fakeCell), 100);
+}
+
+/* ---------- BALANCE CHECKPOINT MODAL ---------- */
+function openBalanceCheckpointModal(cell){
+  const date = cell.dataset.date;
+  const currentBalText = cell.textContent.replace(/[£,−\s]/g,'');
+  const currentBal = parseFloat(currentBalText) * (cell.textContent.includes('−') ? -1 : 1);
+  const hasCP = S.checkpoints[date] !== undefined;
+
+  openModal(`
+    <h3>⚓ Balance Checkpoint · ${dateLabel(parseDate(date))}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+      Projected balance: <strong class="mono">${fmt(currentBal)}</strong>
+      ${hasCP ? ' · <span class="badge b-purple">CHECKPOINT ACTIVE</span>' : ''}
+    </p>
+    <p style="font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.5">
+      Set a checkpoint to match your real bank balance on this date. Everything before recalibrates; the forecast carries forward from this anchor.
+    </p>
+
+    <div class="fg">
+      <label>Actual Bank Balance (£)</label>
+      <input type="number" id="cp-amount" value="${hasCP?S.checkpoints[date]:currentBal.toFixed(2)}" step="0.01" inputmode="decimal" autofocus>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveCheckpoint('${date}')">${hasCP?'Update':'Set'} Checkpoint</button>
+      ${hasCP ? `<button class="btn btn-amber" onclick="clearCheckpoint('${date}')">Remove Checkpoint</button>` : ''}
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+function saveCheckpoint(date){
+  const v = parseFloat(document.getElementById('cp-amount').value);
+  if (isNaN(v)) return alert('Enter valid balance.');
+  S.checkpoints[date] = v; save(); closeModal(); refreshCFInPlace();
+}
+function clearCheckpoint(date){
+  delete S.checkpoints[date]; save(); closeModal(); refreshCFInPlace();
+}
+
+/* ---------- AD-HOC ADD MODAL ---------- */
+function openAdhocAddModal(cell){
+  const date = cell.dataset.date;
+  const colKey = cell.dataset.col;
+  const colDef = CF_COLS.find(c => c.key === colKey);
+  openModal(`
+    <h3>Add transaction · ${dateLabel(parseDate(date))}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Quick one-off entry in "${colDef.label}" column.</p>
+    <div class="fg"><label>Description</label><input id="ah-name" placeholder="e.g. Taxi home" autofocus></div>
+    <div class="fg"><label>Amount (£)</label><input type="number" id="ah-amount" step="0.01" inputmode="decimal"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveAdhoc('${date}','${colKey}')">Add</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+function saveAdhoc(date, colKey){
+  const name = document.getElementById('ah-name').value.trim();
+  const amt = parseFloat(document.getElementById('ah-amount').value);
+  if (!name || isNaN(amt) || amt <= 0) return alert('Fill all fields.');
+  const colDef = CF_COLS.find(c => c.key === colKey);
+  S.transactions.push({
+    id:uid(), name, amount:amt, type:colDef.type, freq:'once',
+    startDate:date, endDate:null, dayOfMonth:null, category:colDef.type
+  });
+  save(); closeModal(); refreshCFInPlace();
+}
+
+function deleteOneOff(txId){
+  S.transactions = S.transactions.filter(t => t.id !== txId);
+  // Also clean up any override that may have been set for it
+  Object.keys(S.overrides).forEach(k => {
+    if (k.endsWith('__' + txId)) delete S.overrides[k];
+  });
+  save(); closeModal(); refreshCFInPlace();
+}
+function openOverridesModal(){
+  const keys = Object.keys(S.overrides).sort();
+  openModal(`
+    <h3>🟡 Active Overrides</h3>
+    ${keys.length === 0 ? '<div class="empty-state">No overrides. Tap any amount in Cash Flow to create one.</div>' : `
+    <p style="font-size:11px;color:var(--text3);margin-bottom:12px">These one-off edits override the schedule on specific dates.</p>
+    <div class="sch-tbl-wrap" style="max-height:50vh;overflow-y:auto"><table class="sch-tbl">
+      <thead><tr><th>Date</th><th>Transaction</th><th>Amount</th><th></th></tr></thead>
+      <tbody>${keys.map(k => {
+        const [date, txId] = k.split('__');
+        const tx = S.transactions.find(t => t.id === txId);
+        const v = S.overrides[k];
+        return `<tr>
+          <td class="mono">${dateLabel(parseDate(date))}</td>
+          <td>${tx?tx.name:'(deleted)'}</td>
+          <td class="mono">${v===null?'<span class="c-red">Cancelled</span>':fmt(v)}</td>
+          <td><button class="btn btn-danger btn-sm" onclick="clearOverride('${date}','${txId}');closeModal();refreshCFInPlace()">Revert</button></td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table></div>
+    <div class="form-actions" style="margin-top:12px">
+      <button class="btn btn-danger" onclick="if(confirm('Clear ALL overrides?')){S.overrides={};save();closeModal();refreshCFInPlace()}">Clear All</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+    </div>
+    `}
+  `);
+}
+
+/* ---------- CHECKPOINTS MANAGEMENT ---------- */
+function openCheckpointsModal(){
+  const keys = Object.keys(S.checkpoints).sort();
+  openModal(`
+    <h3>⚓ Balance Checkpoints</h3>
+    ${keys.length === 0 ? '<div class="empty-state">No checkpoints. Tap any Balance cell to anchor to real bank data.</div>' : `
+    <p style="font-size:11px;color:var(--text3);margin-bottom:12px">Balance anchors — the forecast recalculates forward from these.</p>
+    <div class="sch-tbl-wrap" style="max-height:50vh;overflow-y:auto"><table class="sch-tbl">
+      <thead><tr><th>Date</th><th>Balance</th><th></th></tr></thead>
+      <tbody>${keys.map(d => `<tr>
+        <td class="mono">${dateLabel(parseDate(d))}</td>
+        <td class="mono">${fmt(S.checkpoints[d])}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="clearCheckpoint('${d}')">Remove</button></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="form-actions" style="margin-top:12px">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+    </div>
+    `}
+  `);
+}
+
+/* ---------- SCHEDULE TABLE ---------- */
+let _showOneOffs = false;
+function toggleOneOffsVisible(){
+  _showOneOffs = !_showOneOffs;
+  const btn = document.getElementById('toggle-oneoffs-btn');
+  if (btn) btn.textContent = _showOneOffs ? 'Hide one-offs' : 'Show one-offs';
+  renderTxScheduleTable();
+}
+
+function renderTxScheduleTable(){
+  const el = document.getElementById('tx-schedule-table');
+  if (!S.transactions.length) {
+    el.innerHTML = '<div class="empty-state">No schedules yet. Click "＋ New Schedule" above.</div>';
+    return;
+  }
+
+  // Count hidden one-offs so we can show a note
+  const oneOffCount = S.transactions.filter(t => t.freq === 'once').length;
+
+  const groups = groupTxByName();
+  const typeLabel = {moneyIn:'In',spending:'Spend',creditCard:'CC',loans:'Loans',bills:'Bills',houseAccount:'House',jointSavings:'Joint',emergencyFund:'Emerg',t212:'T212',personalSavings:'Personal',out:'Out'};
+  const typeCol = {moneyIn:'var(--green)',spending:'var(--red)',creditCard:'var(--red)',loans:'var(--red)',bills:'var(--red)',houseAccount:'var(--amber)',jointSavings:'var(--accent)',emergencyFund:'var(--accent)',t212:'var(--accent)',personalSavings:'var(--accent)'};
+
+  const rows = groups.map(g => g.versions.map((v,vi) => {
+      // Hide one-offs unless toggled on
+      if (v.freq === 'once' && !_showOneOffs) return '';
+      const isActive = !v.endDate || parseDate(v.endDate) >= today;
+      const isCurrent = vi === g.versions.length-1;
+      const startD = v.startDate ? parseDate(v.startDate) : null;
+      const endD   = v.endDate   ? parseDate(v.endDate)   : null;
+      const isObsolete = startD && endD && startD < today && endD < today;
+      if (isObsolete) return '';
+      return `<tr style="${!isActive?'opacity:0.45':''}">
+        <td style="font-weight:${vi===0?'700':'400'};color:${vi===0?'var(--text)':'var(--text2)'}">${vi===0?g.name:''}</td>
+        <td><span style="font-size:10px;font-weight:700;color:${typeCol[v.type]||'var(--text2)'}">${typeLabel[v.type]||v.type}</span></td>
+        <td class="mono" style="color:${v.type==='moneyIn'?'var(--green)':'var(--red)'}">${fmt(v.amount)}</td>
+        <td style="font-size:11px;color:var(--text2)">${v.freq==='once'?'One-off':v.freq==='monthly'?'Monthly ('+v.dayOfMonth+')':'Last W/Day'}</td>
+        <td class="mono" style="font-size:11px">${v.startDate}</td>
+        <td class="mono" style="font-size:11px;color:${v.endDate?'var(--red)':'var(--green)'}">${v.endDate||'ongoing'}</td>
+        <td><div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${isCurrent?`<button class="btn btn-ghost btn-sm" onclick="openTxModal('${v.id}')">Edit</button>`:''}
+          <button class="btn btn-danger btn-sm" onclick="deleteTxVersion('${v.id}')">✕</button>
+        </div></td>
+      </tr>`;
+    }).join('')).join('');
+
+  const hiddenNote = (!_showOneOffs && oneOffCount > 0)
+    ? `<div style="font-size:11px;color:var(--text3);padding:10px 12px;border-top:1px solid var(--border)">${oneOffCount} one-off transaction${oneOffCount!==1?'s':''} hidden · click "Show one-offs" to view</div>`
+    : '';
+
+  el.innerHTML = `<div class="sch-tbl-wrap"><table class="sch-tbl">
+    <thead><tr><th>Name</th><th>Type</th><th>Amount</th><th>Frequency</th><th>Active From</th><th>Active Until</th><th>Actions</th></tr></thead>
+    <tbody>${rows}</tbody>
+    </table>${hiddenNote}</div>`;
+}
+
+function deleteTxVersion(id){
+  if (!confirm('Delete this version? Forecast will update.')) return;
+  S.transactions = S.transactions.filter(t => t.id !== id);
+  save(); refreshCFInPlace();
+}
+
+function openTxModal(editId){
+  const tx = editId ? S.transactions.find(t => t.id===editId) : null;
+  const typeOptions = [
+    ['moneyIn','💚 Money In (Salary, income)'],
+    ['spending','🛒 Spending / Cash'],
+    ['creditCard','💳 Credit Card Payment'],
+    ['loans','🏦 Loan Payment'],
+    ['bills','📋 Bill'],
+    ['houseAccount','🏠 House Account'],
+    ['jointSavings','💾 Joint Savings'],
+    ['emergencyFund','🆘 Emergency Fund'],
+    ['t212','📈 T212 / Investments'],
+    ['personalSavings','💰 Personal Savings'],
+  ].map(([v,l])=>`<option value="${v}" ${tx?.type===v?'selected':''}>${l}</option>`).join('');
+
+  openModal(`
+    <h3>${tx?'Edit Schedule':'New Schedule'}</h3>
+    <div class="fg"><label>Name</label><input id="tx-name" value="${tx?tx.name:''}" placeholder="e.g. Salary, Netflix"></div>
+    <div class="fr">
+      <div class="fg"><label>Column / Type</label><select id="tx-type">${typeOptions}</select></div>
+      <div class="fg"><label>Amount (£)</label><input type="number" id="tx-amount" value="${tx?tx.amount:''}" step="0.01" inputmode="decimal"></div>
+    </div>
+    <div class="fg"><label>Frequency</label>
+      <select id="tx-freq" onchange="txFreqChange()">
+        <option value="once" ${tx?.freq==='once'?'selected':''}>One-off</option>
+        <option value="monthly" ${tx?.freq==='monthly'||!tx?'selected':''}>Monthly</option>
+        <option value="lastwd" ${tx?.freq==='lastwd'?'selected':''}>Last Working Day</option>
+      </select>
+    </div>
+    <div id="tx-freq-fields"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveTxModal('${editId||''}')">Save</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+  setTimeout(() => {
+    txFreqChange();
+    if (tx) {
+      const sd=document.getElementById('tx-startDate'); if(sd)sd.value=tx.startDate||fmtDate(today);
+      const ed=document.getElementById('tx-endDate'); if(ed&&tx.endDate)ed.value=tx.endDate;
+      const dom=document.getElementById('tx-dom'); if(dom)dom.value=tx.dayOfMonth||1;
+    }
+  }, 0);
+}
+
+function txFreqChange(){
+  const freq = document.getElementById('tx-freq')?.value;
+  const el = document.getElementById('tx-freq-fields');
+  if (!el) return;
+  if (freq === 'once'){
+    el.innerHTML = `<div class="fg"><label>Date</label><input type="date" id="tx-startDate" value="${fmtDate(today)}"></div>`;
+  } else if (freq === 'monthly'){
+    el.innerHTML = `<div class="fr">
+      <div class="fg"><label>Day of Month</label><input type="number" id="tx-dom" min="1" max="31" value="1"></div>
+      <div class="fg"><label>Active From</label><input type="date" id="tx-startDate" value="${fmtDate(today)}"></div>
+    </div>
+    <div class="fg"><label>Active Until (optional)</label><input type="date" id="tx-endDate"><div class="fg-hint">Leave blank for ongoing.</div></div>`;
+  } else if (freq === 'lastwd'){
+    el.innerHTML = `<div class="fr">
+      <div class="fg"><label>Active From</label><input type="date" id="tx-startDate" value="${fmtDate(today)}"></div>
+      <div class="fg"><label>Active Until (optional)</label><input type="date" id="tx-endDate"></div>
+    </div>`;
+  }
+}
+
+function saveTxModal(editId){
+  const name = document.getElementById('tx-name').value.trim();
+  const type = document.getElementById('tx-type').value;
+  const amount = parseFloat(document.getElementById('tx-amount').value);
+  const freq = document.getElementById('tx-freq').value;
+  const startDate = document.getElementById('tx-startDate')?.value || fmtDate(today);
+  const endDate = document.getElementById('tx-endDate')?.value || null;
+  const dom = parseInt(document.getElementById('tx-dom')?.value) || 1;
+  if (!name || isNaN(amount) || amount<=0) return alert('Fill all required fields.');
+  const obj = {id:editId||uid(), name, type, amount, freq, startDate, endDate, dayOfMonth:dom, category:type};
+  if (editId){ const i = S.transactions.findIndex(t=>t.id===editId); if(i>=0) S.transactions[i]=obj; }
+  else S.transactions.push(obj);
+  save(); closeModal(); refreshCFInPlace();
+}
+
+/* ==========================================================================
+   SAVINGS
+   ========================================================================== */
+
+/*
+  Compute a pot's live balance:
+    anchorBalance  (stored on pot as p.balance)
+  + all CF contributions of the matching type from anchorDate → today (inclusive)
+  + all manual withdrawals logged against this pot (p.withdrawals[])
+
+  anchorDate defaults to today if not set (p.anchorDate).
+*/
+function computeLivePotBalance(pot){
+  const cfType = potCFType(pot);
+  const anchorDate = pot.anchorDate ? parseDate(pot.anchorDate) : today;
+  let contrib = 0;
+
+  if (cfType){
+    const flow = getFlow();
+    flow.forEach(r => {
+      // include anchorDate itself only if anchor was set before today (i.e. a past date)
+      if (r.dateObj < anchorDate) return;
+      if (r.dateObj > today) return;
+      contrib += (r.cols[cfType] || 0);
+    });
+  }
+
+  // Withdrawals: array of { id, date, amount, note }
+  const withdrawals = (pot.withdrawals || []).reduce((s, w) => {
+    const wd = parseDate(w.date);
+    if (wd >= anchorDate && wd <= today) return s + w.amount;
+    return s;
+  }, 0);
+
+  return +(pot.balance + contrib - withdrawals).toFixed(2);
+}
+
+function setDebtStrategy(s){ S.debtStrategy = s; save(); renderDebt(); }
+
+/*
+  computePotTargetDate -- forward-walk with optional compound interest
+  Walks the flow engine day by day from today into the future.
+  Accumulates scheduled CF contributions for this pot type.
+  Also subtracts future scheduled withdrawals (if any).
+  Returns { date, months, monthlyAvg } when the pot hits its target,
+  or null if it never reaches it within the forecast window.
+*/
+function computePotTargetDate(pot, liveBalance, flow){
+  const cfType    = potCFType(pot);
+  const target    = pot.target;
+  if (liveBalance >= target) return { date: today, months: 0, monthlyAvg: 0 };
+
+  let running = liveBalance;
+  let totalContrib = 0;
+  let monthsElapsed = 0;
+  let lastMonth = -1;
+
+  for (const r of flow){
+    if (r.dateObj <= today) continue;
+
+    // Track months elapsed for average calc
+    const mo = r.dateObj.getMonth() + r.dateObj.getFullYear() * 12;
+    if (mo !== lastMonth){
+      monthsElapsed++;
+      lastMonth = mo;
+      // Apply monthly compound interest if enabled and pot has a rate
+      if (S.settings?.interestModellingEnabled && pot.interestRate > 0){
+        const monthlyRate = pot.interestRate / 100 / 12;
+        running = +(running * (1 + monthlyRate)).toFixed(2);
+      }
+    }
+
+    // Add CF contribution for this pot
+    if (cfType && r.cols[cfType]){
+      running      += r.cols[cfType];
+      totalContrib += r.cols[cfType];
+    }
+
+    // Subtract any future withdrawals on this date
+    if (pot.withdrawals){
+      pot.withdrawals.forEach(w => {
+        if (w.date === r.date) running = Math.max(0, running - w.amount);
+      });
+    }
+
+    if (running >= target){
+      const monthlyAvg = monthsElapsed > 0 ? +(totalContrib / monthsElapsed).toFixed(2) : 0;
+      return { date: r.dateObj, months: monthsElapsed, monthlyAvg };
+    }
+  }
+
+  // Didn't reach target within forecast window
+  // Return a projection based on average contribution rate so far
+  if (totalContrib > 0 && monthsElapsed > 0){
+    const avgPerMonth = totalContrib / monthsElapsed;
+    const rem = target - running;
+    const extraMonths = Math.ceil(rem / avgPerMonth);
+    const projDate = addMonths(today, monthsElapsed + extraMonths);
+    return { date: projDate, months: monthsElapsed + extraMonths, monthlyAvg: +avgPerMonth.toFixed(2), beyondForecast: true };
+  }
+  return null;
+}
+
+/*
+  computePotProjectionData(pot, liveBalance, flow)
+  Returns monthly data points for charting:
+  { labels[], principal[], withInterest[] }
+  principal = contributions only (no interest)
+  withInterest = contributions + compound interest (if rate set)
+*/
+function computePotProjectionData(pot, liveBalance, flow){
+  const cfType      = potCFType(pot);
+  const rate        = (S.settings?.interestModellingEnabled && pot.interestRate > 0) ? pot.interestRate : 0;
+  const monthlyRate = rate / 100 / 12;
+  const target      = pot.target;
+
+  const labels = [], principal = [], withInterest = [];
+  let runPrincipal = liveBalance;
+  let runInterest  = liveBalance;
+  let lastMonth    = -1;
+  let monthCount   = 0;
+  const forecastMonths = Math.max((S.forecastEndYear - today.getFullYear()), 2) * 12;
+  const MAX_MONTHS = Math.min(forecastMonths * 2, 480);
+
+  // Add today as first point
+  labels.push('Now');
+  principal.push(+liveBalance.toFixed(2));
+  withInterest.push(+liveBalance.toFixed(2));
+
+  // ── Phase 1: walk the actual CF flow window ──
+  // Track per-month contributions so we can inspect the trailing signal at the end.
+  const monthlyContribs = []; // [{month, contrib}] one entry per CF month
+  let currentMonthContrib = 0;
+
+  for (const r of flow){
+    if (r.dateObj <= today) continue;
+    const mo = r.dateObj.getMonth() + r.dateObj.getFullYear() * 12;
+
+    if (mo !== lastMonth){
+      if (lastMonth !== -1){
+        // Close out the previous month
+        monthlyContribs.push(currentMonthContrib);
+        currentMonthContrib = 0;
+
+        const stride = MAX_MONTHS > 60 ? 3 : 1;
+        if (monthCount % stride === 0){
+          const prevDate = new Date(r.dateObj.getFullYear(), r.dateObj.getMonth() - 1, 1);
+          labels.push(prevDate.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}));
+          principal.push(+runPrincipal.toFixed(2));
+          withInterest.push(+runInterest.toFixed(2));
+        }
+      }
+      lastMonth = mo;
+      monthCount++;
+      if (monthCount > MAX_MONTHS) break;
+      if (monthlyRate > 0) runInterest = +(runInterest * (1 + monthlyRate)).toFixed(2);
+    }
+
+    if (cfType && r.cols[cfType]){
+      const contrib = r.cols[cfType];
+      runPrincipal     = +(runPrincipal + contrib).toFixed(2);
+      runInterest      = +(runInterest  + contrib).toFixed(2);
+      currentMonthContrib += contrib;
+    }
+  }
+  // Close the final month
+  if (monthCount > 0) monthlyContribs.push(currentMonthContrib);
+
+  // Push the final month from the CF window
+  if (monthCount > 0){
+    const finalDate = new Date(today.getFullYear(), today.getMonth() + monthCount, 1);
+    labels.push(finalDate.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}));
+    principal.push(+runPrincipal.toFixed(2));
+    withInterest.push(+runInterest.toFixed(2));
+  }
+
+  // ── Phase 2: extrapolate ONLY if target not yet reached at end of CF window ──
+  //
+  // TRAILING SIGNAL: look at the last 3 months of CF data.
+  // If contributions have stopped (all zero), treat that as an end-of-data signal
+  // and do NOT extrapolate — the chart simply flattens at the CF window boundary.
+  // Only extrapolate if the trailing months show active positive contributions.
+  const cfPointCount = labels.length;
+
+  if (runPrincipal < target && monthlyContribs.length > 0){
+    const trailingWindow = monthlyContribs.slice(-3);
+    const trailingAvg = trailingWindow.reduce((s, v) => s + v, 0) / trailingWindow.length;
+
+    // Only extrapolate if contributions were still flowing at the end of the CF window
+    if (trailingAvg > 0){
+      let extraCount = 0;
+      while (runPrincipal < target && extraCount < 480){
+        extraCount++;
+        if (monthlyRate > 0) runInterest = +(runInterest * (1 + monthlyRate)).toFixed(2);
+        runPrincipal = +(runPrincipal + trailingAvg).toFixed(2);
+        runInterest  = +(runInterest  + trailingAvg).toFixed(2);
+        const totalM = monthCount + extraCount;
+        const pt = new Date(today.getFullYear(), today.getMonth() + totalM, 1);
+        labels.push(pt.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}));
+        principal.push(+runPrincipal.toFixed(2));
+        withInterest.push(+runInterest.toFixed(2));
+      }
+    }
+    // If trailingAvg === 0: contributions have ceased — no extrapolation, chart ends flat.
+  }
+
+  return { labels, principal, withInterest, hasInterest: rate > 0, cfPointCount };
+}
+
+function renderSavings(){
+  const el = document.getElementById('page-savings');
+  el.innerHTML = `
+<div class="sh">
+  <div><h2>💾 Savings Tracker</h2><p>Anchor → live CF contributions → projected to target</p></div>
+  <button class="btn btn-primary btn-sm" onclick="openSavingsModal()">＋ Add Pot</button>
+</div>
+<div class="g2 savings-grid" id="savings-pots-grid"></div>`;
+
+  const flow = getFlow();
+
+  document.getElementById('savings-pots-grid').innerHTML = S.savingsPots.map(p => {
+    const liveBalance = computeLivePotBalance(p);
+    const cfType      = potCFType(p);
+    const anchorDate  = p.anchorDate || fmtDate(today);
+    const pct         = Math.min(liveBalance / p.target, 1);
+    const rem         = Math.max(0, p.target - liveBalance);
+    const projection  = computePotTargetDate(p, liveBalance, flow);
+    const est         = projection ? projection.date : null;
+    const monthlyAvg  = projection ? projection.monthlyAvg : 0;
+    const beyondNote  = projection?.beyondForecast ? ' †' : '';
+    const withdrawTotal = (p.withdrawals||[]).reduce((s,w)=>s+w.amount,0);
+    const hasRate     = p.interestRate > 0 && S.settings?.interestModellingEnabled;
+    const chartId     = `pot-chart-${p.id}`;
+
+    const cfLabel = cfType
+      ? `<span style="font-size:10px;color:var(--accent)">⚡ CF linked</span>`
+      : `<span style="font-size:10px;color:var(--text3)">No CF link</span>`;
+    const rateLabel = hasRate
+      ? `<span style="font-size:10px;color:var(--green)">📈 ${p.interestRate}% AER</span>`
+      : '';
+    const anchorLabel = `<span style="font-size:10px;color:var(--text3)">⚓ ${anchorDate}</span>`;
+
+    return `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="min-width:0">
+          <div class="kpi-label">${p.name}</div>
+          <div class="kpi-value c-green">${fmt(liveBalance)}</div>
+          <div class="kpi-sub" style="margin-top:2px">of ${fmt(p.target)} target</div>
+          <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">${cfLabel}${rateLabel} ${anchorLabel}</div>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm" onclick="openSavingsModal('${p.id}')">Edit</button>
+          <button class="btn btn-amber btn-sm" onclick="openWithdrawModal('${p.id}')">↓</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteSavings('${p.id}')">✕</button>
+        </div>
+      </div>
+
+      <div class="prog-wrap" style="margin-top:10px">
+        <div class="prog-labels"><span>${(pct*100).toFixed(1)}%</span><span class="mono">${fmt(rem)} to go</span></div>
+        <div class="prog-bg"><div class="prog-fill" style="width:${(Math.min(pct,1)*100).toFixed(1)}%;background:${p.color||'var(--accent)'}"></div></div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text2)">
+        <span>${monthlyAvg>0?fmt(monthlyAvg)+'/mo':'No contributions'}</span>
+        <span>${est?'🏁 '+est.toLocaleDateString('en-GB',{month:'short',year:'numeric'})+beyondNote:'—'}</span>
+      </div>
+
+      <div class="chart-wrap" style="height:140px;margin-top:12px">
+        <canvas id="${chartId}"></canvas>
+      </div>
+
+      ${withdrawTotal>0?`<div style="font-size:10px;color:var(--amber);margin-top:6px">↓ ${fmt(withdrawTotal)} withdrawn since anchor</div>`:''}
+      ${projection?.beyondForecast?`<div style="font-size:9px;color:var(--text3);margin-top:4px">† Beyond forecast window — extend the TO year in Settings to see full projection</div>`:''}
+    </div>`;
+  }).join('');
+
+  // Render a mini chart for each pot
+  S.savingsPots.forEach(p => {
+    const chartId = `pot-chart-${p.id}`;
+    const canvas  = document.getElementById(chartId);
+    if (!canvas) return;
+
+    const liveBalance = computeLivePotBalance(p);
+    const { labels, principal, withInterest, hasInterest, cfPointCount } = computePotProjectionData(p, liveBalance, flow);
+    const potColor = p.color || 'var(--accent)';
+    const resolvedColor = getComputedStyle(document.documentElement).getPropertyValue(
+      potColor.replace('var(','').replace(')','').trim()
+    ).trim() || '#4f8ef7';
+
+    // Destroy existing chart if any
+    const existingKey = `savings_${p.id}`;
+    if (charts[existingKey]) charts[existingKey].destroy();
+
+    const targetLine = Array(labels.length).fill(p.target);
+
+    // Split principal/interest into CF-backed (solid) and extrapolated (dashed) segments.
+    // Chart.js segment option lets us dash individual points beyond the CF window.
+    const hasExtrapolation = labels.length > cfPointCount;
+
+    const datasets = [
+      {
+        label: 'Principal',
+        data: principal,
+        borderColor: resolvedColor,
+        backgroundColor: resolvedColor + '18',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: true,
+        segment: hasExtrapolation ? {
+          borderDash: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? [5, 4] : undefined,
+          borderColor: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? resolvedColor + '88' : resolvedColor,
+        } : undefined,
+      }
+    ];
+
+    if (hasInterest){
+      datasets.push({
+        label: 'With Interest',
+        data: withInterest,
+        borderColor: '#22d47e',
+        backgroundColor: 'rgba(34,212,126,0.08)',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.3,
+        fill: false,
+        borderDash: [4,3],
+        segment: hasExtrapolation ? {
+          borderDash: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? [2, 4] : [4, 3],
+          borderColor: ctx => ctx.p0DataIndex >= cfPointCount - 1 ? '#22d47e55' : '#22d47e',
+        } : undefined,
+      });
+    }
+
+    datasets.push({
+      label: 'Target',
+      data: targetLine,
+      borderColor: 'rgba(255,255,255,0.15)',
+      borderWidth: 1,
+      pointRadius: 0,
+      fill: false,
+      borderDash: [2,4],
+    });
+
+    charts[existingKey] = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode:'index', intersect:false },
+        plugins: {
+          legend: {
+            display: hasInterest,
+            position: 'bottom',
+            labels: { boxWidth:8, font:{size:9}, color: cssVar('--chart-tick'), padding:8 }
+          },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${fmt(ctx.raw)}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: cssVar('--chart-grid') },
+            ticks: { color: cssVar('--chart-tick'), font:{size:8}, maxTicksLimit:6 }
+          },
+          y: {
+            grid: { color: cssVar('--chart-grid') },
+            ticks: {
+              color: cssVar('--chart-tick'),
+              font: {size:8},
+              callback: v => v >= 1000 ? '£'+Math.round(v/1000)+'k' : '£'+v
+            }
+          }
+        }
+      }
+    });
+  });
+}
+
+function openSavingsModal(editId){
+  const p = editId ? S.savingsPots.find(s=>s.id===editId) : null;
+  const liveBalance = p ? computeLivePotBalance(p) : 0;
+
+  openModal(`
+    <h3>${p?'Edit':'Add'} Savings Pot</h3>
+    <div class="fg"><label>Pot Name</label><input id="sp-name" value="${p?p.name:''}" autofocus></div>
+    <div class="fg"><label>Target (£)</label><input type="number" id="sp-target" value="${p?p.target:''}" step="0.01" inputmode="decimal"></div>
+
+    ${p ? `
+    <hr class="div">
+    <p style="font-size:11px;color:var(--text2);margin-bottom:10px;line-height:1.5">
+      <strong>Rebaseline balance</strong> — sets a new anchor at today. All previous CF contributions are replaced by this figure. Use when interest is credited or you want to sync with your actual account.
+    </p>
+    <div class="fg">
+      <label>New Anchor Balance (£) — current live: <strong class="mono">${fmt(liveBalance)}</strong></label>
+      <input type="number" id="sp-balance" placeholder="Leave blank to keep current" step="0.01" inputmode="decimal">
+      <div class="fg-hint">Only fill this in if you want to rebaseline. Leave blank to keep the live balance unchanged.</div>
+    </div>
+    ` : `
+    <div class="fg">
+      <label>Opening Balance (£)</label>
+      <input type="number" id="sp-balance" value="0" step="0.01" inputmode="decimal">
+      <div class="fg-hint">Set this to your actual balance today. Cash flow contributions will stack on top from here.</div>
+    </div>
+    `}
+
+    ${S.settings?.interestModellingEnabled ? `
+    <div class="fg"><label>Interest Rate % AER (optional)</label>
+      <input type="number" id="sp-interest" value="${p?(p.interestRate||''):''}" step="0.01" inputmode="decimal">
+      <div class="fg-hint">e.g. 2.75 for 2.75% AER. Applied monthly in the projection.</div>
+    </div>` : ''}
+
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveSavingsPot('${editId||''}')">Save</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function saveSavingsPot(editId){
+  const name = document.getElementById('sp-name').value.trim();
+  const target = parseFloat(document.getElementById('sp-target').value);
+  const balanceInput = document.getElementById('sp-balance').value;
+  const interestRate = parseFloat(document.getElementById('sp-interest')?.value) || 0;
+  if (!name || isNaN(target)) return alert('Please enter a name and target.');
+
+  const cols = ['var(--accent)','var(--green)','var(--purple)','var(--amber)','var(--red)'];
+
+  if (editId){
+    const i = S.savingsPots.findIndex(s=>s.id===editId);
+    if (i < 0) return;
+    const existing = S.savingsPots[i];
+    // Only rebaseline if a new balance was actually entered
+    if (balanceInput !== '' && !isNaN(parseFloat(balanceInput))){
+      const newBalance = parseFloat(balanceInput);
+      existing.balance    = newBalance;
+      existing.anchorDate = fmtDate(today);
+      existing.withdrawals = []; // clear withdrawals — new anchor absorbs everything
+    }
+    existing.name   = name;
+    existing.target = target;
+    existing.interestRate = interestRate;
+  } else {
+    const newPot = {
+      id: uid(), name, target,
+      balance: parseFloat(balanceInput) || 0,
+      anchorDate: fmtDate(today),
+      monthly: 0,
+      interestRate,
+      withdrawals: [],
+      color: cols[S.savingsPots.length % cols.length]
+    };
+    S.savingsPots.push(newPot);
+  }
+  save(); closeModal(); renderSavings();
+}
+
+function openWithdrawModal(potId){
+  const p = S.savingsPots.find(s=>s.id===potId);
+  if (!p) return;
+  const liveBalance = computeLivePotBalance(p);
+  const history = (p.withdrawals||[]).slice().reverse().slice(0,5);
+  openModal(`
+    <h3>↓ Withdraw from ${p.name}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Current balance: <strong class="mono">${fmt(liveBalance)}</strong></p>
+    <div class="fr">
+      <div class="fg"><label>Amount (£)</label><input type="number" id="wd-amount" step="0.01" inputmode="decimal" autofocus></div>
+      <div class="fg"><label>Date</label><input type="date" id="wd-date" value="${fmtDate(today)}"></div>
+    </div>
+    <div class="fg"><label>Note (optional)</label><input id="wd-note" placeholder="e.g. Holiday spending"></div>
+    ${history.length ? `
+    <div style="margin-top:12px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3);margin-bottom:6px">Recent withdrawals</div>
+      ${history.map(w=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>${dateLabel(parseDate(w.date))} ${w.note?'· '+w.note:''}</span>
+        <span class="mono c-amber">−${fmt(w.amount)}</span>
+      </div>`).join('')}
+    </div>` : ''}
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveWithdrawal('${potId}')">Log Withdrawal</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function saveWithdrawal(potId){
+  const amount = parseFloat(document.getElementById('wd-amount').value);
+  const date   = document.getElementById('wd-date').value;
+  const note   = document.getElementById('wd-note').value.trim();
+  if (isNaN(amount) || amount <= 0 || !date) return alert('Enter a valid amount and date.');
+  const p = S.savingsPots.find(s=>s.id===potId);
+  if (!p) return;
+  if (!p.withdrawals) p.withdrawals = [];
+  p.withdrawals.push({ id:uid(), date, amount, note });
+  p.withdrawals.sort((a,b) => a.date.localeCompare(b.date));
+  save(); closeModal(); renderSavings();
+}
+
+function deleteSavings(id){
+  if(confirm('Delete this pot?')){ S.savingsPots=S.savingsPots.filter(p=>p.id!==id); save(); renderSavings(); }
+}
+
+/* ==========================================================================
+   DEBT — SMART SNOWBALL ENGINE
+   ========================================================================== */
+
+/*
+  getMonthlyDebtBudget()
+  ──────────────────────
+  Reads the creditCard CF total for the next 3 scheduled months and averages
+  them. Falls back to S.debtBudgetOverride if the user has manually set one.
+*/
+function getMonthlyDebtBudget(){
+  if (S.debtBudgetOverride && S.debtBudgetOverride > 0) return S.debtBudgetOverride;
+  const flow = getFlow();
+  const totals = [0,1,2].map(i => {
+    const mStart = addMonths(today, i);
+    const mEnd   = addMonths(today, i+1);
+    return flow.filter(r => r.dateObj >= mStart && r.dateObj < mEnd)
+               .reduce((s,r) => s + (r.cols.creditCard||0), 0);
+  }).filter(v => v > 0);
+  if (totals.length === 0) return S.debtCards.reduce((s,c)=>s+(c.standardPayment||c.minPayment||10),0);
+  return +(totals.reduce((a,b)=>a+b,0) / totals.length).toFixed(2);
+}
+
+/*
+  runSnowball(budget, cards)
+  ──────────────────────────
+  Full month-by-month snowball simulation.
+
+  Rules (in priority order each month):
+  1. Pay minimum on every active card.
+  2. For any card with a 0% deadline, check if current balance ÷ months remaining
+     requires MORE than the minimum — if so, top it up to that required amount.
+     (0% protection always wins over snowball allocation.)
+  3. Any remaining budget after minimums + 0%-protection top-ups goes to the
+     smallest non-zero balance card (snowball attack card).
+  4. When a card hits zero, its payment cascades into the next attack card.
+
+  Returns array of monthly snapshots:
+  { month, date, budgetUsed, allocations:{cardId→amount}, balances:{cardId→bal}, cleared:[cardId] }
+*/
+function runSnowball(budget, cards){
+  if (!cards.length || budget <= 0) return [];
+
+  // Deep-copy balances
+  let balances = {};
+  cards.forEach(c => { balances[c.id] = +c.balance.toFixed(2); });
+
+  const months = [];
+  const MAX_MONTHS = 360;
+  const startMonth = 1; // current month already paid, start from next
+
+  // ── Calculate attack order ONCE upfront ──
+  // Use the card's stored standard payment if set (above the minimum), else the minimum.
+  // No arbitrary £50 floor — respect whatever the user has configured.
+  const getEffectiveMin = c => {
+    const min = c.minPayment > 0 ? c.minPayment : 10;
+    const std = c.standardPayment && c.standardPayment > min ? c.standardPayment : min;
+    return std;
+  };
+  const strategy = S.debtStrategy || 'snowball';
+
+  let ATTACK_ORDER;
+  if (strategy === 'avalanche'){
+    ATTACK_ORDER = [...cards].sort((a,b) => (b.apr||0) - (a.apr||0));
+  } else {
+    // Snowball: earliest 0% deadline first, then smallest balance
+    const dealCards   = cards.filter(c => c.zeroEndDate).sort((a,b) => parseDate(a.zeroEndDate) - parseDate(b.zeroEndDate));
+    const noDealCards = cards.filter(c => !c.zeroEndDate).sort((a,b) => a.balance - b.balance);
+    ATTACK_ORDER = [...dealCards, ...noDealCards];
+  }
+
+  for (let m = startMonth; m < MAX_MONTHS + startMonth; m++){
+    const activeCards = cards.filter(c => balances[c.id] > 0.005);
+    if (!activeCards.length) break;
+
+    const monthDate = addMonths(today, m);
+    const alloc = {};
+    cards.forEach(c => { alloc[c.id] = 0; });
+    let pot = +budget.toFixed(2);
+
+    // ── Step 1: Minimums on all active cards ──
+    activeCards.forEach(c => {
+      const min       = +Math.min(getEffectiveMin(c), balances[c.id]).toFixed(2);
+      alloc[c.id]     = min;
+      pot             = +(pot - min).toFixed(2);
+    });
+
+    // ── Step 2: Pour ALL surplus into attack order (fixed upfront) ──
+    // Only cascade to next card if current attack card is fully cleared
+    if (pot > 0.005){
+      for (const target of ATTACK_ORDER){
+        if (pot <= 0.005) break;
+        if (balances[target.id] <= 0.005) continue; // already cleared
+        const space = +Math.max(0, balances[target.id] - alloc[target.id]).toFixed(2);
+        if (space <= 0) continue;
+        const give       = +Math.min(pot, space).toFixed(2);
+        alloc[target.id] = +(alloc[target.id] + give).toFixed(2);
+        pot              = +(pot - give).toFixed(2);
+        // Only cascade if fully cleared this month
+        if (alloc[target.id] < balances[target.id] - 0.005) break;
+      }
+    }
+
+    // ── Apply payments ──
+    const cleared = [];
+    const newBalances = {};
+    cards.forEach(c => {
+      const pay         = +Math.min(alloc[c.id], balances[c.id]).toFixed(2);
+      alloc[c.id]       = pay;
+      newBalances[c.id] = +Math.max(0, balances[c.id] - pay).toFixed(2);
+      if (newBalances[c.id] < 0.01 && pay > 0){ newBalances[c.id] = 0; cleared.push(c.id); }
+    });
+    balances = newBalances;
+
+    const budgetUsed = +cards.reduce((s, c) => +(s + alloc[c.id]).toFixed(2), 0).toFixed(2);
+    months.push({ month:m, date:monthDate, budgetUsed, allocations:{...alloc}, balances:{...balances}, cleared });
+  }
+  return months;
+}
+
+function renderDebt(){
+  const el = document.getElementById('page-debt');
+
+  // Migrate: ensure debtBudgetOverride exists
+  if (!S.hasOwnProperty('debtBudgetOverride')) S.debtBudgetOverride = null;
+
+  const budget      = getMonthlyDebtBudget();
+  const cfDerived   = !S.debtBudgetOverride;
+  const cards = [
+    ...S.debtCards.filter(c => c.zeroEndDate).sort((a,b) => parseDate(a.zeroEndDate) - parseDate(b.zeroEndDate)),
+    ...S.debtCards.filter(c => !c.zeroEndDate).sort((a,b) => a.balance - b.balance)
+  ];
+  const strategy = S.debtStrategy || 'snowball';
+  const totalDebt   = cards.reduce((s,c)=>s+c.balance,0);
+  const totalMin    = cards.reduce((s,c)=>s+(c.minPayment||10),0);
+  const totalStd    = cards.reduce((s,c)=>s+(c.standardPayment||c.minPayment||10),0);
+
+  // Run the engine
+  const plan = runSnowball(budget, cards);
+  const freedMonth = plan.length ? plan[plan.length-1] : null;
+  const dfDate = freedMonth ? addMonths(today, freedMonth.month+1) : null;
+  const daysLeft = dfDate ? Math.ceil((dfDate-today)/86400000) : null;
+
+  // Find when each card clears
+  const clearMonth = {}; // cardId → month index
+  plan.forEach(snap => {
+    snap.cleared.forEach(id => { if(!clearMonth.hasOwnProperty(id)) clearMonth[id] = snap.month; });
+  });
+
+  el.innerHTML = `
+<div class="sh">
+  <div><h2>💳 Debt ${strategy==='avalanche'?'Avalanche':'Snowball'}</h2><p>${strategy==='avalanche'?'Highest APR first':'Earliest deadline first'} · auto-allocated · cascading</p></div>
+  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;background:var(--surface2);border:1px solid var(--border);border-radius:6px;overflow:hidden">
+      <button class="btn btn-sm" style="border-radius:0;border:none;background:${strategy==='snowball'?'var(--accent)':'transparent'};color:${strategy==='snowball'?'#fff':'var(--text2)'}" onclick="setDebtStrategy('snowball')">❄️ Snowball</button>
+      <button class="btn btn-sm" style="border-radius:0;border:none;background:${strategy==='avalanche'?'var(--accent)':'transparent'};color:${strategy==='avalanche'?'#fff':'var(--text2)'}" onclick="setDebtStrategy('avalanche')">🔥 Avalanche</button>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="openDebtModal()">＋ Add Card</button>
+  </div>
+</div>
+
+<div class="g4" style="margin-bottom:14px">
+  <div class="card">
+    <div class="kpi-label">Total Remaining</div>
+    <div class="kpi-value c-red">${fmt(totalDebt)}</div>
+    <div class="kpi-sub">${cards.length} cards</div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">Monthly Budget</div>
+    <div class="kpi-value">${fmt(budget)}</div>
+    <div class="kpi-sub" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      <span>${cfDerived ? '⚡ From cash flow' : '✏️ Manual override'}</span>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:10px" onclick="openBudgetOverrideModal()">
+        ${cfDerived ? 'Override' : 'Reset to CF'}
+      </button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">Surplus over Payments</div>
+    <div class="kpi-value c-green">${fmt(Math.max(0, budget - totalStd))}</div>
+    <div class="kpi-sub">Mins: ${fmt(totalMin)}${totalStd>totalMin?` · Std: ${fmt(totalStd)}`:''}  </div>
+  </div>
+  <div class="card">
+    <div class="kpi-label">Debt Freedom</div>
+    <div class="kpi-value c-green" style="font-size:17px">${dfDate ? dfDate.toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—'}</div>
+    <div class="kpi-sub">${daysLeft ? daysLeft.toLocaleString()+' days' : ''}</div>
+  </div>
+</div>
+
+<h3 style="margin-bottom:10px;font-size:14px;letter-spacing:-0.3px">
+  Snowball Order
+  <span style="font-size:10px;color:var(--text3);font-weight:400"> · smallest first · budget auto-allocated each month</span>
+</h3>
+<div id="debt-list" style="margin-bottom:14px"></div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:10px">📅 Month-by-Month Allocation</div>
+  <div class="snowball-scroll">
+    <table class="sch-tbl" id="snowball-table" style="min-width:${cards.length*100+200}px"></table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="kpi-label">📈 Payoff Timeline</div>
+  <div class="chart-wrap tall"><canvas id="debt-chart"></canvas></div>
+</div>`;
+
+  // ── Card tiles ──
+  document.getElementById('debt-list').innerHTML = cards.map((c,i) => {
+    const isAttack = i === 0 && cards.filter(x=>x.balance>0).length > 0;
+    const clearMo  = clearMonth.hasOwnProperty(c.id) ? clearMonth[c.id] : null;
+    const clearDt  = clearMo !== null ? addMonths(today, clearMo+1) : null;
+
+    // This month's allocation from the plan
+    const thisMonthAlloc = plan.length ? (plan[0].allocations[c.id] || 0) : 0;
+
+    let dealAlert = '';
+    if (c.zeroEndDate){
+      const dealEnd    = parseDate(c.zeroEndDate);
+      const moToEnd    = Math.max(1, Math.round((dealEnd - today) / 2628000000));
+      const required   = +(c.balance / moToEnd).toFixed(2);
+      const onTrack    = clearDt && clearDt <= dealEnd;
+      const moToClrMin = c.balance > 0 ? Math.ceil(c.balance / (c.minPayment || 10)) : 0;
+      const atRiskWithoutSnowball = moToClrMin > moToEnd;
+      dealAlert = `<div style="background:var(--surface3);border:1px solid var(--border2);border-radius:8px;padding:10px 12px;margin-top:8px;font-size:11px">
+        <div style="font-size:10px;font-weight:700;color:var(--amber);margin-bottom:3px">
+          0% ends ${dealEnd.toLocaleDateString('en-GB',{month:'short',year:'numeric'})} · ${moToEnd}mo left
+        </div>
+        <div>Need <strong class="mono">${fmt(required)}</strong>/mo to clear in time ·
+          <span style="color:${onTrack?'var(--green)':'var(--red)'};font-weight:700">
+            ${onTrack ? '✅ On track' : '❌ At risk'}
+          </span>
+        </div>
+        ${atRiskWithoutSnowball && onTrack ? `<div style="color:var(--accent);margin-top:3px;font-size:10px">⚡ Snowball reprioritised this card to protect deadline</div>` : ''}
+      </div>`;
+    }
+
+    return `<div class="sb-card ${isAttack?'attack':''}">
+      <div class="sb-name">
+        ${isAttack ? '🎯 ' : ''}${c.name}
+        ${isAttack ? '<div><span class="badge b-green" style="margin-top:3px;font-size:9px">ATTACK TARGET</span></div>' : ''}
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">Due: ${ordinal(c.due)}</div>
+      </div>
+      <div class="sb-details">
+        <div class="mono" style="font-size:15px;color:var(--red);font-weight:600">${fmt(c.balance)}</div>
+        <div style="font-size:10px;color:var(--text2);margin-top:2px">
+          This month: <strong class="mono">${fmt(thisMonthAlloc)}</strong> · Min: ${fmt(c.minPayment || 10)}${c.standardPayment && c.standardPayment > (c.minPayment||10) ? ` · Std: ${fmt(c.standardPayment)}` : ''}
+        </div>
+        <div style="font-size:10px;color:var(--text3);margin-top:2px">
+          ${clearDt ? '🏁 Clear: '+clearDt.toLocaleDateString('en-GB',{month:'short',year:'numeric'})+' ('+clearMo+'mo)' : 'Budget insufficient to clear'}
+        </div>
+        ${dealAlert}
+      </div>
+      <div class="sb-actions">
+        <button class="btn btn-ghost btn-sm" onclick="openDebtModal('${c.id}')">Edit</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteDebt('${c.id}')">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── Month-by-month allocation table (first 24 months) ──
+  const tableMonths = plan.slice(0, 24);
+
+  // cardId → parsed promo end Date (null if no promo)
+  const cardPromoEnd = {};
+  cards.forEach(c => { cardPromoEnd[c.id] = c.zeroEndDate ? parseDate(c.zeroEndDate) : null; });
+
+  // For a given card and snap.date, is this exactly the promo expiry month?
+  const isPromoExpiry = (c, snapDate) => {
+    const pe = cardPromoEnd[c.id];
+    if (!pe) return false;
+    return snapDate.getFullYear() === pe.getFullYear() && snapDate.getMonth() === pe.getMonth();
+  };
+
+  // Effective floor per card — mirrors the engine
+  const effMin = c => {
+    const m = c.minPayment > 0 ? c.minPayment : 10;
+    return (c.standardPayment && c.standardPayment > m) ? c.standardPayment : m;
+  };
+
+  const tHead = `<thead><tr>
+    <th>Month</th>
+    ${cards.map(c => {
+      const pe = cardPromoEnd[c.id];
+      const promoLabel = pe ? `<div style="font-size:8px;color:var(--amber);font-weight:500;margin-top:1px">0% → ${pe.toLocaleDateString('en-GB',{month:'short',year:'2-digit'})}</div>` : '';
+      return `<th style="color:var(--red)">${c.name}${promoLabel}</th>`;
+    }).join('')}
+    <th>Total</th>
+    <th>Remaining Debt</th>
+  </tr></thead>`;
+
+  const tBody = `<tbody>${tableMonths.map(snap => {
+    const totalRem = +Object.values(snap.balances).reduce((a,b)=>a+b,0).toFixed(2);
+    const isNow = snap.month === 1;
+    return `<tr style="${isNow ? 'background:var(--accent-glow)' : ''}">
+      <td class="mono" style="font-weight:${isNow ? 700 : 400}">
+        ${snap.date.toLocaleDateString('en-GB',{month:'short',year:'2-digit'})}
+        ${isNow ? ' <span class="today-badge">NOW</span>' : ''}
+      </td>
+      ${cards.map(c => {
+        const amt  = snap.allocations[c.id] || 0;
+        const bal  = snap.balances[c.id];
+        const justCleared  = snap.cleared.includes(c.id);
+        const promoExpiry  = isPromoExpiry(c, snap.date);
+        // At expiry: did the balance clear in time?
+        const promoBreach  = promoExpiry && !justCleared && bal > 0.01;
+        const promoSafe    = promoExpiry && (justCleared || bal <= 0.01);
+
+        // Cell background
+        const cellBg = promoBreach ? 'background:rgba(255,84,112,0.22);'
+                     : promoSafe   ? 'background:rgba(34,212,126,0.18);'
+                     : '';
+
+        // Text colour
+        const floor = effMin(c);
+        const textColor = justCleared || promoSafe
+          ? 'var(--green)'
+          : promoBreach
+            ? 'var(--red)'
+            : amt > floor + 0.01
+              ? 'var(--green)'
+              : amt > 0
+                ? 'var(--text)'
+                : 'var(--text3)';
+
+        // Label inside the cell
+        const promoLabel = promoBreach
+          ? '<br><span style="font-size:9px;color:var(--red);font-weight:700">❌ PAST PROMO</span>'
+          : promoSafe
+            ? '<br><span style="font-size:9px;color:var(--green);font-weight:700">✅ CLEARED</span>'
+            : '';
+
+        return `<td class="mono" style="color:${textColor};${cellBg}font-weight:${justCleared || promoExpiry ? 700 : 400}">
+          ${amt > 0 ? fmt(amt) : '—'}
+          ${justCleared && !promoExpiry ? ' <span style="font-size:9px;color:var(--green)">✓ CLEAR</span>' : ''}
+          ${promoLabel}
+        </td>`;
+      }).join('')}
+      <td class="mono" style="font-weight:600">${fmt(snap.budgetUsed)}</td>
+      <td class="mono" style="color:${totalRem < totalDebt*0.5 ? 'var(--green)' : totalRem < totalDebt*0.8 ? 'var(--amber)' : 'var(--red)'}">${fmt(totalRem)}</td>
+    </tr>`;
+  }).join('')}</tbody>`;
+
+  document.getElementById('snowball-table').innerHTML = tHead + tBody;
+
+  // ── Chart — stacked bar per card ──
+  const chartMonths = plan.slice(0, Math.min(plan.length, 60));
+  const chartLabels = chartMonths.map(s => s.date.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}));
+  const cardColors  = ['rgba(255,84,112,0.7)','rgba(240,167,50,0.7)','rgba(79,142,247,0.7)','rgba(160,124,255,0.7)','rgba(34,212,126,0.7)','rgba(255,150,80,0.7)'];
+
+  const datasets = cards.map((c,i) => ({
+    label: c.name,
+    data: chartMonths.map(s => +(s.balances[c.id]||0).toFixed(2)),
+    backgroundColor: cardColors[i % cardColors.length],
+    borderRadius: 2,
+    borderSkipped: false,
+  }));
+
+  if (charts.debt) charts.debt.destroy();
+  charts.debt = new Chart(document.getElementById('debt-chart').getContext('2d'), {
+    type: 'bar',
+    data: { labels: chartLabels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'bottom', labels:{ boxWidth:10, font:{size:10}, color:cssVar('--chart-tick'), padding:10 } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmt(ctx.raw)}` } }
+      },
+      scales: {
+        x: { stacked:true, grid:{color:cssVar('--chart-grid')}, ticks:{color:cssVar('--chart-tick'),font:{size:9},maxTicksLimit:18} },
+        y: { stacked:true, grid:{color:cssVar('--chart-grid')}, ticks:{color:cssVar('--chart-tick'),font:{size:9},callback:v=>v>=1000?'£'+Math.round(v/1000)+'k':fmt(v)} }
+      }
+    }
+  });
+}
+
+function openBudgetOverrideModal(){
+  const current = getMonthlyDebtBudget();
+  const isOverride = !!S.debtBudgetOverride;
+  openModal(`
+    <h3>💳 Monthly Debt Budget</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">
+      Currently: <strong class="mono">${fmt(current)}</strong>
+      ${isOverride ? ' · <span class="badge b-amber">MANUAL OVERRIDE</span>' : ' · auto-read from Cash Flow'}
+    </p>
+    <p style="font-size:11px;color:var(--text3);margin-bottom:12px;line-height:1.5">
+      By default this is read automatically from your Cash Flow creditCard column (averaged over the next 3 months).
+      Set a manual override if you want to lock in a specific monthly budget.
+    </p>
+    <div class="fg">
+      <label>Monthly Budget Override (£)</label>
+      <input type="number" id="dbo-amount" value="${isOverride ? S.debtBudgetOverride : current}" step="0.01" inputmode="decimal" autofocus>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveBudgetOverride()">Set Override</button>
+      ${isOverride ? `<button class="btn btn-amber" onclick="clearBudgetOverride()">Reset to Cash Flow</button>` : ''}
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+function saveBudgetOverride(){
+  const v = parseFloat(document.getElementById('dbo-amount').value);
+  if (isNaN(v) || v <= 0) return alert('Enter a valid amount.');
+  S.debtBudgetOverride = v; save(); closeModal(); renderDebt();
+}
+function clearBudgetOverride(){
+  S.debtBudgetOverride = null; save(); closeModal(); renderDebt();
+}
+
+function openDebtModal(editId){
+  const c = editId ? S.debtCards.find(d=>d.id===editId) : null;
+  openModal(`
+    <h3>${c?'Edit':'Add'} Credit Card</h3>
+    <div class="fg"><label>Card Name</label><input id="dc-name" value="${c?c.name:''}" autofocus></div>
+    <div class="fr">
+      <div class="fg"><label>Current Balance (£)</label><input type="number" id="dc-balance" value="${c?c.balance:''}" step="0.01" inputmode="decimal"></div>
+      <div class="fg"><label>Due Day</label><input type="number" id="dc-due" value="${c?c.due:''}" min="1" max="31"></div>
+    </div>
+    <div class="fg"><label>Minimum Payment (£)</label><input type="number" id="dc-min" value="${c ? (c.minPayment || 10) : 10}" step="0.01" inputmode="decimal">
+      <div class="fg-hint">Minimum the lender requires each month. Enter the actual minimum from your statement.</div>
+    </div>
+    <div class="fg"><label>Standard Monthly Payment (£) <span style="font-weight:400;color:var(--text3)">optional</span></label><input type="number" id="dc-std" value="${c?.standardPayment || ''}" step="0.01" inputmode="decimal" placeholder="Leave blank to use minimum">
+      <div class="fg-hint">Set this above the minimum to see the impact on your clear date. The engine uses this as the floor for this card's monthly payment.</div>
+    </div>
+    <div class="fg"><label>0% Interest End Date (optional)</label><input type="date" id="dc-zero" value="${c?.zeroEndDate||''}">
+      <div class="fg-hint">The engine will protect this deadline — automatically increasing payments if needed to clear in time.</div>
+    </div>
+    <div class="fg"><label>APR % (optional — for Avalanche mode)</label><input type="number" id="dc-apr" value="${c?.apr||''}" step="0.1" inputmode="decimal">
+      <div class="fg-hint">Only needed if using Avalanche strategy in Settings.</div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveDebtCard('${editId||''}')">Save</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+function saveDebtCard(editId){
+  const name       = document.getElementById('dc-name').value.trim();
+  const balance    = parseFloat(document.getElementById('dc-balance').value);
+  const due        = parseInt(document.getElementById('dc-due').value) || 1;
+  const minPayment      = parseFloat(document.getElementById('dc-min').value) || 10;
+  const standardPayment = parseFloat(document.getElementById('dc-std').value) || 0;
+  const zeroEndDate= document.getElementById('dc-zero').value || null;
+  const apr        = parseFloat(document.getElementById('dc-apr').value) || 0;
+  if (!name || isNaN(balance)) return alert('Enter card name and balance.');
+  const payment = standardPayment > minPayment ? standardPayment : minPayment;
+  const obj = {id:editId||uid(), name, balance, due, payment, minPayment, standardPayment: standardPayment > minPayment ? standardPayment : 0, apr, zeroEndDate};
+  if (editId){ const i=S.debtCards.findIndex(d=>d.id===editId); if(i>=0) S.debtCards[i]=obj; }
+  else S.debtCards.push(obj);
+  save(); closeModal(); renderDebt();
+}
+function deleteDebt(id){ if(confirm('Delete card?')){ S.debtCards=S.debtCards.filter(d=>d.id!==id); save(); renderDebt(); } }
+
+/* ==========================================================================
+   SETTINGS PAGE
+   ========================================================================== */
+function renderSettings(){
+  const el = document.getElementById('page-settings');
+  const notifSupported = 'Notification' in window;
+  const notifGranted   = notifSupported && Notification.permission === 'granted';
+  const isLocalFile    = location.protocol === 'file:';
+
+  el.innerHTML = `
+<div class="sh"><div><h2>⚙️ Settings</h2><p>Preferences · data · notifications</p></div></div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:12px">💾 Data & Sync</div>
+  <div style="margin-bottom:12px">
+    ${firebaseConfigured && _fbUser ? `
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface2);border-radius:8px;margin-bottom:10px">
+      <div style="width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0"></div>
+      <div>
+        <div style="font-size:12px;font-weight:600">Synced to cloud</div>
+        <div style="font-size:10px;color:var(--text3)">Signed in as ${_fbUser.displayName || _fbUser.email} · Data syncs automatically across all devices</div>
+      </div>
+    </div>` : `
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface2);border-radius:8px;margin-bottom:10px">
+      <div style="width:8px;height:8px;border-radius:50%;background:var(--amber);flex-shrink:0"></div>
+      <div>
+        <div style="font-size:12px;font-weight:600">Local storage only</div>
+        <div style="font-size:10px;color:var(--text3)">${firebaseConfigured ? 'Not signed in' : 'Firebase not configured — see setup guide below'}</div>
+      </div>
+    </div>`}
+  </div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.5">
+    Export your data as a JSON file. Import it on any device to restore everything.
+  </p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-primary" onclick="exportData()">⬇ Export Backup</button>
+    <label class="btn btn-ghost" style="cursor:pointer">⬆ Import Backup<input type="file" accept=".json" style="display:none" onchange="importData(this)"></label>
+  </div>
+  <div style="margin-top:10px;font-size:11px;color:var(--text3)">Last saved: ${new Date().toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+  ${!firebaseConfigured ? `
+  <details style="margin-top:14px">
+    <summary style="font-size:11px;font-weight:700;color:var(--accent);cursor:pointer">🔧 How to enable cloud sync</summary>
+    <div style="font-size:11px;color:var(--text2);line-height:1.7;margin-top:10px;padding:10px;background:var(--surface2);border-radius:6px">
+      1. Go to <strong>firebase.google.com</strong> and create a free account<br>
+      2. Create a new project (any name, e.g. "FCC")<br>
+      3. In Project Settings → Your Apps, click the web icon (&lt;/&gt;) and register an app<br>
+      4. Enable <strong>Authentication → Google sign-in</strong><br>
+      5. Enable <strong>Realtime Database</strong> → Start in test mode<br>
+      6. Copy your config values into the <code>FIREBASE_CONFIG</code> object in the HTML file<br>
+      7. Host the file on GitHub Pages or Netlify (free)<br>
+      8. Open the hosted URL and sign in with Google
+    </div>
+  </details>` : ''}
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:12px">🔔 Notifications</div>
+  ${isLocalFile ? `
+  <div class="alert al-amber" style="margin-bottom:8px">
+    Notifications require the app to be hosted online (HTTPS). They won't work when opening the file directly from your device. This will be available when FCC is hosted on the web.
+  </div>` : !notifSupported ? `
+  <div class="alert al-amber">Browser notifications not supported on this device.</div>
+  ` : ''}
+  <div class="toggle-wrap" style="${isLocalFile?'opacity:0.4;pointer-events:none':''}">
+    <div>
+      <div class="toggle-label">Enable Reminders</div>
+      <div class="toggle-hint">Payday alerts, bill due dates, 0% deadline warnings</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" ${S.settings.notificationsEnabled?'checked':''} onchange="toggleSetting('notificationsEnabled',this.checked)" ${isLocalFile?'disabled':''}>
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+  ${!isLocalFile && S.settings.notificationsEnabled && notifSupported && !notifGranted ? `
+  <div class="alert al-blue" style="margin-top:8px">
+    Permission needed · <button class="btn btn-ghost btn-sm" onclick="requestNotifPermission()">Grant Permission</button>
+  </div>` : ''}
+  ${!isLocalFile && S.settings.notificationsEnabled ? `
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn btn-ghost btn-sm" onclick="scheduleNotifications()">🔄 Reschedule All Reminders</button>
+    <button class="btn btn-ghost btn-sm" onclick="testNotification()">Test Notification</button>
+  </div>` : ''}
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:12px">📈 Interest Modelling</div>
+  <div class="toggle-wrap">
+    <div>
+      <div class="toggle-label">Enable Interest on Savings</div>
+      <div class="toggle-hint">Applies compound interest to pots with an AER rate set. Edit each pot to add a rate.</div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" ${S.settings.interestModellingEnabled?'checked':''} onchange="toggleSetting('interestModellingEnabled',this.checked)">
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+  ${S.settings.interestModellingEnabled ? `
+  <div style="margin-top:8px;font-size:11px;color:var(--text2)">
+    ✅ Active — edit any savings pot to set its AER rate. T212/investment pots benefit most from this.
+  </div>` : ''}
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:12px">🎯 Forecast</div>
+  <div class="toggle-wrap">
+    <div>
+      <div class="toggle-label">Forecast To Year</div>
+      <div class="toggle-hint">How far ahead to project cash flow and net worth</div>
+    </div>
+    <select style="width:100px" onchange="S.forecastEndYear=parseInt(this.value);save();renderAll()">
+      ${Array.from({length:16},(_,i)=>new Date().getFullYear()+i).map(y=>`<option value="${y}" ${y===S.forecastEndYear?'selected':''}>${y}</option>`).join('')}
+    </select>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:12px">🎨 Appearance</div>
+  <div class="toggle-wrap">
+    <div>
+      <div class="toggle-label">Theme</div>
+      <div class="toggle-hint">Light or dark mode</div>
+    </div>
+    <button class="btn btn-ghost btn-sm" onclick="toggleTheme()">${document.documentElement.classList.contains('light')?'Switch to Dark':'Switch to Light'}</button>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="kpi-label" style="margin-bottom:12px">🚀 Onboarding</div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Re-run the setup wizard to review your initial configuration.</p>
+  <button class="btn btn-ghost" onclick="startOnboarding()">Run Setup Wizard</button>
+</div>
+
+<div class="card">
+  <div class="kpi-label" style="margin-bottom:12px">⚠️ Danger Zone</div>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:12px">Permanently wipe all data and start from scratch. Export a backup first.</p>
+  <button class="btn btn-danger" onclick="resetToDefaults()">🗑 Reset All Data</button>
+</div>
+
+<div class="card" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="kpi-label">📋 Version History</div>
+    <span style="font-size:11px;font-weight:700;color:var(--accent)">${FCC_VERSION}</span>
+  </div>
+  ${FCC_CHANGELOG.map((c,i) => `
+  <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);${i===0?'background:var(--accent-glow);margin:-2px -4px;padding:8px 4px;border-radius:4px':''}">
+    <div style="flex-shrink:0;text-align:right;min-width:44px">
+      <span style="font-size:10px;font-weight:700;color:${i===0?'var(--accent)':'var(--text3)'}">${c.v}</span>
+    </div>
+    <div style="flex:1">
+      <div style="font-size:11px;color:var(--text2)">${c.note}</div>
+      <div style="font-size:10px;color:var(--text3);margin-top:2px">${c.date}</div>
+    </div>
+  </div>`).join('')}
+</div>`;
+}
+
+function toggleSetting(key, val){
+  S.settings[key] = val;
+  save();
+  renderSettings();
+}
+
+/* ── DATA BACKUP / RESTORE ── */
+function exportData(){
+  const blob = new Blob([JSON.stringify(S, null, 2)], {type:'application/json'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `fcc_backup_${fmtDate(today)}.json`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function importData(input){
+  const file = input.files[0]; if (!file) return; input.value = '';
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.transactions && !data.savingsPots && !data.debtCards)
+        return alert('This doesn\'t look like a valid FCC backup file.');
+      if (!confirm('This will replace ALL your current data with the backup. Continue?')) return;
+      Object.keys(S).forEach(k => delete S[k]);
+      Object.assign(S, { ...JSON.parse(JSON.stringify(DEFAULT_STATE)), ...data });
+      // Re-run migrations
+      S.savingsPots.forEach(p => {
+        if (!p.anchorDate) p.anchorDate = fmtDate(today);
+        if (!p.withdrawals) p.withdrawals = [];
+        if (!p.hasOwnProperty('interestRate')) p.interestRate = 0;
+      });
+      if (!S.settings) S.settings = { notificationsEnabled:false, interestModellingEnabled:false };
+      if (!S.debtStrategy) S.debtStrategy = 'snowball';
+      save(); invalidateFlow(); cfPage = 0;
+      renderAll();
+      alert('✅ Backup restored successfully!');
+    } catch(err){ alert('Import failed: ' + err.message); }
+  };
+  reader.readAsText(file);
+}
+
+/* ── NOTIFICATIONS ── */
+async function requestNotifPermission(){
+  if (!('Notification' in window)) return;
+  const result = await Notification.requestPermission();
+  if (result === 'granted') scheduleNotifications();
+  renderSettings();
+}
+
+function testNotification(){
+  if (Notification.permission !== 'granted') return alert('Please grant notification permission first.');
+  new Notification('FCC Reminder 🏦', { body: 'Test notification from Financial Command Centre!', icon: '' });
+}
+
+function scheduleNotifications(){
+  if (!S.settings.notificationsEnabled || Notification.permission !== 'granted') return;
+  // Build upcoming alerts
+  const alerts = [];
+  const flow = getFlow();
+
+  // Payday in next 3 days
+  const nextPayday = getNextPayday();
+  if (nextPayday){
+    const d = Math.ceil((nextPayday - today) / 86400000);
+    if (d <= 3 && d >= 0) alerts.push({ title:'💰 Payday soon!', body:`Payday is ${d===0?'today':d===1?'tomorrow':'in '+d+' days'} — ${fmt(S.transactions.find(t=>t.type==='moneyIn'&&t.freq==='lastwd')?.amount||0)} incoming.` });
+  }
+
+  // 0% deals expiring within 60 days
+  S.debtCards.forEach(c => {
+    if (!c.zeroEndDate) return;
+    const end = parseDate(c.zeroEndDate);
+    const days = Math.ceil((end - today) / 86400000);
+    if (days > 0 && days <= 60) alerts.push({ title:`⚠️ 0% deal expiring: ${c.name}`, body:`${c.name} 0% deal ends in ${days} days (${end.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}). Balance: ${fmt(c.balance)}` });
+  });
+
+  // Bills due in next 3 days
+  S.bills.forEach(b => {
+    if (!b.due) return;
+    const thisMonth = new Date(today.getFullYear(), today.getMonth(), b.due);
+    const days = Math.ceil((thisMonth - today) / 86400000);
+    if (days >= 0 && days <= 3) alerts.push({ title:`📋 Bill due: ${b.name}`, body:`${b.name} — ${fmt(b.amount)} due ${days===0?'today':days===1?'tomorrow':'in '+days+' days'}.` });
+  });
+
+  // Show alerts (staggered slightly so they don't all fire at once)
+  alerts.forEach((a, i) => {
+    setTimeout(() => {
+      if (Notification.permission === 'granted') new Notification(a.title, { body: a.body });
+    }, i * 2000);
+  });
+
+  if (alerts.length === 0 && Notification.permission === 'granted'){
+    new Notification('FCC ✅', { body: 'No urgent reminders right now — you\'re on track!' });
+  }
+}
+
+/* ── ONBOARDING ── */
+const ONBOARD_STEPS = [
+  // ── WELCOME ──
+  {
+    title: 'Your finances, finally under control.',
+    hint: '',
+    isWelcome: true,
+    render: () => `
+      <div style="text-align:center;padding:8px 0 16px">
+        <div style="font-size:40px;margin-bottom:12px">🏦</div>
+        <p style="font-size:13px;color:var(--text2);line-height:1.7;margin-bottom:16px">
+          <strong>FCC</strong> is a personal finance command centre that projects your money forward in real time — so you always know where you stand.
+        </p>
+        <div style="text-align:left;background:var(--surface2);border-radius:8px;padding:14px 16px;margin-bottom:12px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3);margin-bottom:10px">Here's what's inside</div>
+          <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--text2);line-height:1.5">
+            <div><span style="font-size:15px;margin-right:8px">💰</span><strong style="color:var(--text)">Cash Flow</strong> — a live spreadsheet projecting your current account day by day, months into the future. Every salary, bill, and transfer scheduled in one place.</div>
+            <div><span style="font-size:15px;margin-right:8px">💾</span><strong style="color:var(--text)">Savings</strong> — track your pots with live balances that update automatically as scheduled contributions hit. See exactly when you'll reach your targets.</div>
+            <div><span style="font-size:15px;margin-right:8px">💳</span><strong style="color:var(--text)">Debt Snowball</strong> — enter your credit cards once. FCC automatically allocates your monthly budget across cards, clearing the smallest first and protecting any 0% deals from expiring.</div>
+            <div><span style="font-size:15px;margin-right:8px">📈</span><strong style="color:var(--text)">Dashboard</strong> — your net worth trajectory, savings milestones, and debt freedom date all in one view. Updated live as your data changes.</div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text3)">Setup takes about 2 minutes. You can edit everything later.</p>
+      </div>`,
+    save: () => {}
+  },
+  // ── OPENING BALANCE ──
+  {
+    title: '1. Current Account Balance',
+    hint: 'The starting point for your cash flow projection',
+    render: () => `
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">
+        Check your banking app and enter what's in your main current account <strong>right now</strong>. This is the anchor for everything — FCC projects forward from here based on your income and outgoings.
+      </p>
+      <div class="fg">
+        <label>Current Account Balance (£)</label>
+        <input type="number" id="ob-onboard" value="${S.openingBalance||''}" step="0.01" inputmode="decimal" placeholder="e.g. 850.00">
+        <div class="fg-hint">Don't include savings accounts or investments — just your everyday spending account.</div>
+      </div>`,
+    save: () => {
+      const v = parseFloat(document.getElementById('ob-onboard').value);
+      if (!isNaN(v)){ S.openingBalance = v; save(); }
+    }
+  },
+  // ── INCOME ──
+  {
+    title: '2. Your Monthly Income',
+    hint: 'When does money come in?',
+    render: () => `
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">
+        Add your take-home salary — the amount that actually lands in your account after tax. FCC will schedule this automatically every month so your cash flow always knows when payday is.
+      </p>
+      <div class="fg">
+        <label>Monthly Take-Home Pay (£)</label>
+        <input type="number" id="inc-amount" step="0.01" inputmode="decimal" placeholder="e.g. 3500.00" value="${S.transactions.find(t=>t.type==='moneyIn'&&t.freq!=='once')?.amount||''}">
+      </div>
+      <div class="fg">
+        <label>When is payday?</label>
+        <select id="inc-freq">
+          <option value="lastwd">Last working day of month</option>
+          <option value="monthly">Fixed day of month</option>
+        </select>
+      </div>
+      <div class="fg" id="inc-dom-wrap" style="display:none">
+        <label>Day of month</label>
+        <input type="number" id="inc-dom" min="1" max="31" value="${S.transactions.find(t=>t.type==='moneyIn'&&t.freq==='monthly')?.dayOfMonth||25}">
+      </div>
+      <div class="fg-hint" style="margin-top:4px">You can add multiple income sources (freelance, rental income etc.) in the Cash Flow tab later.</div>`,
+    save: () => {
+      const amt  = parseFloat(document.getElementById('inc-amount').value);
+      const freq = document.getElementById('inc-freq').value;
+      const dom  = parseInt(document.getElementById('inc-dom')?.value) || 25;
+      if (!isNaN(amt) && amt > 0){
+        const existing = S.transactions.find(t => t.type==='moneyIn' && t.freq!=='once');
+        if (existing){ existing.amount = amt; existing.freq = freq; existing.dayOfMonth = dom; }
+        else S.transactions.push({ id:uid(), name:'Salary', amount:amt, type:'moneyIn', freq, startDate:fmtDate(today), endDate:null, dayOfMonth:dom, category:'Income' });
+        save(); invalidateFlow();
+      }
+    }
+  },
+  // ── BILLS ──
+  {
+    title: '3. Regular Bills',
+    hint: 'Your fixed monthly commitments',
+    render: () => `
+      <p style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.6">
+        Bills feed directly into your cash flow projection — FCC will automatically deduct these on their due date each month so your balance stays accurate. Enter what you know and skip the rest.
+      </p>
+      ${['Rent / Mortgage','Council Tax','Gas','Electricity','Water','Internet / Broadband'].map((name,i) => {
+        const key = name.split('/')[0].trim().split(' ')[0].toLowerCase();
+        const ex  = S.bills.find(b => b.name.toLowerCase().includes(key));
+        return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <div style="font-size:12px;flex:0 0 150px;color:var(--text)">${name}</div>
+          <input type="number" id="bill-ob-${i}" value="${ex?ex.amount:''}" step="0.01" inputmode="decimal" placeholder="£/mo" style="max-width:110px">
+        </div>`;
+      }).join('')}
+      <div class="fg-hint" style="margin-top:8px">Subscriptions, insurance, phone — add those in the Bills tab after setup.</div>`,
+    save: () => {
+      const names = ['Rent/Mortgage','Council Tax','Gas','Electricity','Water','Internet'];
+      const cats  = ['Housing','Tax','Utilities','Utilities','Utilities','Utilities'];
+      names.forEach((name,i) => {
+        const v = parseFloat(document.getElementById(`bill-ob-${i}`)?.value);
+        if (!isNaN(v) && v > 0){
+          const key = name.split('/')[0].toLowerCase();
+          const ex  = S.bills.find(b => b.name.toLowerCase().includes(key));
+          if (ex){ ex.amount = v; }
+          else S.bills.push({ id:uid(), name, category:cats[i], amount:v, due:1, startDate:fmtDate(today), endDate:null });
+        }
+      });
+      save(); invalidateFlow();
+    }
+  },
+  // ── DEBT ──
+  {
+    title: '4. Credit Card Debt',
+    hint: 'FCC\'s snowball engine will plan your payoff automatically',
+    render: () => `
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">
+        Enter each credit card you're paying off. Each month, FCC allocates your total card budget — paying minimums on all cards, then throwing everything left at the smallest balance first. When that clears, the freed payment rolls onto the next card automatically.
+      </p>
+      <div style="background:var(--accent-glow);border:1px solid var(--accent);border-radius:6px;padding:10px 12px;margin-bottom:14px;font-size:11px;color:var(--accent)">
+        💡 If any card has a <strong>0% interest deal</strong>, add the expiry date — FCC will protect that deadline and make sure you clear it in time.
+      </div>
+      ${S.debtCards.length > 0 ? `
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3);margin-bottom:6px">${S.debtCards.length} card${S.debtCards.length>1?'s':''} added</div>
+        ${S.debtCards.map(c => `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px">
+          <span>${c.name}</span>
+          <span class="mono c-red">${fmt(c.balance)}</span>
+        </div>`).join('')}
+      </div>` : ''}
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:4px">
+        <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px">${S.debtCards.length > 0 ? '＋ Add another card' : 'Add your first card'}</div>
+        <div class="fg"><label>Card Name</label><input id="dc-ob-name" placeholder="e.g. Barclaycard"></div>
+        <div class="fr">
+          <div class="fg"><label>Balance (£)</label><input type="number" id="dc-ob-bal" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+          <div class="fg"><label>Min Payment (£)</label><input type="number" id="dc-ob-min" step="0.01" inputmode="decimal" placeholder="50.00"></div>
+        </div>
+        <div class="fg">
+          <label>0% Deal End Date (optional)</label>
+          <input type="date" id="dc-ob-zero">
+          <div class="fg-hint">Leave blank if you're paying standard interest or don't have a deal.</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="onboardAddCard()">＋ Add Card</button>
+      </div>`,
+    save: () => {} // saving handled by onboardAddCard button
+  },
+  // ── SAVINGS ──
+  {
+    title: '5. Savings Pots',
+    hint: 'What are you building towards?',
+    render: () => `
+      <p style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">
+        Savings pots track what you're building towards — a house deposit, emergency fund, investments. FCC links each pot to your cash flow so the balance updates automatically as contributions are scheduled.
+      </p>
+      ${S.savingsPots.length > 0 ? `
+      <div style="margin-bottom:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3);margin-bottom:6px">${S.savingsPots.length} pot${S.savingsPots.length>1?'s':''} added</div>
+        ${S.savingsPots.map(p => `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px">
+          <span>${p.name}</span>
+          <span class="mono c-green">${fmt(computeLivePotBalance(p))}</span>
+        </div>`).join('')}
+      </div>` : ''}
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:4px">
+        <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:10px">${S.savingsPots.length > 0 ? '＋ Add another pot' : 'Add your first pot'}</div>
+        <div class="fg"><label>Pot Name</label><input id="sp-ob-name" placeholder="e.g. Emergency Fund, House Deposit"></div>
+        <div class="fr">
+          <div class="fg"><label>Target (£)</label><input type="number" id="sp-ob-target" step="0.01" inputmode="decimal" placeholder="10000"></div>
+          <div class="fg"><label>Current Balance (£)</label><input type="number" id="sp-ob-bal" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:4px" onclick="onboardAddPot()">＋ Add Pot</button>
+      </div>
+      <div class="fg-hint" style="margin-top:10px">You link pots to cash flow contributions in the Savings tab. Name them to match — e.g. "Emergency Fund" links to the Emergency Fund column in Cash Flow.</div>`,
+    save: () => {}
+  }
+];
+
+function onboardAddCard(){
+  const name  = document.getElementById('dc-ob-name')?.value?.trim();
+  const bal   = parseFloat(document.getElementById('dc-ob-bal')?.value);
+  const min   = parseFloat(document.getElementById('dc-ob-min')?.value) || 50;
+  const zero  = document.getElementById('dc-ob-zero')?.value || null;
+  if (!name || isNaN(bal) || bal <= 0){ alert('Please enter a card name and balance.'); return; }
+  S.debtCards.push({ id:uid(), name, balance:bal, due:1, payment:min, minPayment:min, apr:0, zeroEndDate:zero });
+  save();
+  renderOnboardStep(); // re-render to show new card and clear form
+}
+
+function onboardAddPot(){
+  const name   = document.getElementById('sp-ob-name')?.value?.trim();
+  const target = parseFloat(document.getElementById('sp-ob-target')?.value);
+  const bal    = parseFloat(document.getElementById('sp-ob-bal')?.value) || 0;
+  if (!name || isNaN(target) || target <= 0){ alert('Please enter a pot name and target amount.'); return; }
+  const cols = ['var(--accent)','var(--green)','var(--purple)','var(--amber)','var(--red)'];
+  S.savingsPots.push({ id:uid(), name, target, balance:bal, anchorDate:fmtDate(today), monthly:0, interestRate:0, withdrawals:[], color:cols[S.savingsPots.length%cols.length] });
+  save();
+  renderOnboardStep();
+}
+
+let _onboardStep = 0;
+
+function startOnboarding(){
+  _onboardStep = 0;
+  document.getElementById('onboarding-overlay').style.display = 'block';
+  renderOnboardStep();
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+}
+
+function renderOnboardStep(){
+  const step  = ONBOARD_STEPS[_onboardStep];
+  const total = ONBOARD_STEPS.length;
+
+  document.getElementById('onboard-progress').innerHTML = ONBOARD_STEPS.map((_,i) =>
+    `<div class="onboard-pip ${i<_onboardStep?'done':i===_onboardStep?'active':''}"></div>`
+  ).join('');
+
+  const isFirst = _onboardStep === 0;
+  const isLast  = _onboardStep === total - 1;
+
+  document.getElementById('onboard-steps').innerHTML = `
+    <div class="card">
+      <div style="font-size:${step.isWelcome?'20':'17'}px;font-weight:700;margin-bottom:${step.isWelcome?'4':'6'}px;letter-spacing:-0.3px">${step.title}</div>
+      ${step.hint ? `<div style="font-size:12px;color:var(--text2);margin-bottom:14px">${step.hint}</div>` : ''}
+      ${step.render()}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px;gap:8px;flex-wrap:wrap">
+        ${!isFirst ? `<button class="btn btn-ghost btn-sm" onclick="onboardSkip()">${isLast?'Skip':'Skip this step'}</button>` : `<div></div>`}
+        <div style="display:flex;gap:8px">
+          ${_onboardStep>0?`<button class="btn btn-ghost" onclick="onboardBack()">← Back</button>`:''}
+          <button class="btn btn-primary" onclick="onboardNext()">${isLast?'Finish 🎉':isFirst?'Get Started →':'Next →'}</button>
+        </div>
+      </div>
+    </div>`;
+
+  const freqSel = document.getElementById('inc-freq');
+  if (freqSel){
+    const domWrap = document.getElementById('inc-dom-wrap');
+    freqSel.addEventListener('change', () => {
+      domWrap.style.display = freqSel.value==='monthly'?'block':'none';
+    });
+    // Set initial state
+    domWrap.style.display = freqSel.value==='monthly'?'block':'none';
+  }
+}
+
+function onboardNext(){
+  ONBOARD_STEPS[_onboardStep].save();
+  if (_onboardStep === ONBOARD_STEPS.length - 1){ finishOnboarding(); return; }
+  _onboardStep++;
+  renderOnboardStep();
+}
+function onboardSkip(){
+  if (_onboardStep === ONBOARD_STEPS.length - 1){ finishOnboarding(); return; }
+  _onboardStep++;
+  renderOnboardStep();
+}
+function onboardBack(){
+  if (_onboardStep > 0){ _onboardStep--; renderOnboardStep(); }
+}
+function finishOnboarding(){
+  S.settings = S.settings || {};
+  S.settings.onboardingComplete = true;
+  save(); invalidateFlow();
+  document.getElementById('onboarding-overlay').style.display = 'none';
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-dashboard').classList.add('active');
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('[data-page="dashboard"]').classList.add('active');
+  renderDashboard();
+  if (S.settings?.notificationsEnabled) scheduleNotifications();
+}
+
+/* ==========================================================================
+   BILLS
+   ========================================================================== */
+function renderBills(){
+  const el = document.getElementById('page-bills');
+  const activeBills = S.bills.filter(b => !b.endDate || parseDate(b.endDate) >= today);
+  const total = activeBills.reduce((s,b)=>s+b.amount,0);
+  el.innerHTML = `
+<div class="sh"><div><h2>📋 Bills</h2><p>Recurring commitments</p></div>
+<button class="btn btn-primary btn-sm" onclick="openBillModal()">＋ Add Bill</button></div>
+<div class="g3" style="margin-bottom:14px">
+  <div class="card"><div class="kpi-label">Monthly (active)</div><div class="kpi-value">${fmt(total)}</div></div>
+  <div class="card"><div class="kpi-label">Annual (active)</div><div class="kpi-value">${fmt(total*12)}</div></div>
+  <div class="card"><div class="kpi-label">Active Bills</div><div class="kpi-value">${activeBills.length}</div></div>
+</div>
+<div class="sch-tbl-wrap"><table class="sch-tbl">
+<thead><tr><th>Bill</th><th>Category</th><th>Monthly</th><th>Due</th><th>Active From</th><th>Status</th><th></th></tr></thead>
+<tbody>${S.bills.map(b => {
+  const ended = b.endDate && parseDate(b.endDate) < today;
+  if (ended) return '';
+  return `<tr>
+  <td style="font-weight:600">${b.name}</td>
+  <td><span class="badge b-accent">${b.category}</span></td>
+  <td class="mono">${fmt(b.amount)}</td>
+  <td style="color:var(--text2)">${b.due?ordinal(b.due):'—'}</td>
+  <td class="mono" style="font-size:11px;color:var(--text2)">${b.startDate||'—'}</td>
+  <td><span class="badge ${b.endDate?'b-amber':'b-green'}">${b.endDate?'Ends '+b.endDate:'Active'}</span></td>
+  <td><div style="display:flex;gap:6px">
+    <button class="btn btn-ghost btn-sm" onclick="openBillModal('${b.id}')">Edit</button>
+    <button class="btn btn-danger btn-sm" onclick="endBill('${b.id}')">End</button>
+  </div></td>
+</tr>`;
+}).join('')}</tbody></table></div>`;
+}
+
+function endBill(id){
+  const b = S.bills.find(x=>x.id===id);
+  if (!b) return;
+  const dateStr = prompt('End this bill from date (YYYY-MM-DD):', fmtDate(today));
+  if (!dateStr) return;
+  b.endDate = dateStr;
+  save(); renderBills();
+}
+
+function openBillModal(editId){
+  const b = editId ? S.bills.find(x=>x.id===editId) : null;
+  openModal(`<h3>${b?'Edit':'Add'} Bill</h3>
+    <div class="fg"><label>Name</label><input id="bill-name" value="${b?b.name:''}" autofocus></div>
+    <div class="fr">
+      <div class="fg"><label>Category</label><select id="bill-cat">${['Housing','Utilities','Insurance','Tax','Subscriptions','Media','Health','Other'].map(c=>`<option ${b?.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div class="fg"><label>Amount (£)</label><input type="number" id="bill-amount" value="${b?b.amount:''}" step="0.01" inputmode="decimal"></div>
+    </div>
+    <div class="fr">
+      <div class="fg"><label>Due Day</label><input type="number" id="bill-due" value="${b?b.due:''}" min="1" max="31"></div>
+      <div class="fg"><label>Active From</label><input type="date" id="bill-start" value="${b?.startDate||fmtDate(today)}"><div class="fg-hint">When this bill started.</div></div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" onclick="saveBill('${editId||''}')">Save</button><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+
+function saveBill(editId){
+  const name = document.getElementById('bill-name').value.trim();
+  const category = document.getElementById('bill-cat').value;
+  const amount = parseFloat(document.getElementById('bill-amount').value) || 0;
+  const due = parseInt(document.getElementById('bill-due').value) || null;
+  const startDate = document.getElementById('bill-start')?.value || fmtDate(today);
+  if (!name) return;
+  const existing = editId ? S.bills.find(b=>b.id===editId) : null;
+  const obj = {id:editId||uid(), name, category, amount, due, startDate, endDate: existing?.endDate||null};
+  if (editId){ const i=S.bills.findIndex(b=>b.id===editId); if(i>=0) S.bills[i]=obj; }
+  else S.bills.push(obj);
+  save(); closeModal(); renderBills();
+}
+
+function deleteBill(id){ if(confirm('Permanently delete? Use "End" instead to preserve history.')){ S.bills=S.bills.filter(b=>b.id!==id); save(); renderBills(); } }
+
+/* ==========================================================================
+   SPENDING
+   ========================================================================== */
+function renderSpending(){
+  const el = document.getElementById('page-spending');
+  const curKey = fmtDate(today).slice(0,7);
+  const thisMonth = S.spending.filter(s=>s.date.startsWith(curKey));
+  const monthTotal = thisMonth.reduce((s,e)=>s+e.amount,0);
+  const byCat = {};
+  thisMonth.forEach(e=>{ byCat[e.category]=(byCat[e.category]||0)+e.amount; });
+  const maxCat = Math.max(...Object.values(byCat),1);
+
+  el.innerHTML = `
+<div class="sh"><div><h2>🛒 Spending</h2><p>Transaction log · category analysis</p></div>
+<button class="btn btn-primary btn-sm" onclick="openSpendModal()">＋ Log Spend</button></div>
+<div class="g2" style="margin-bottom:14px">
+  <div class="card"><div class="kpi-label">This Month by Category</div>
+    <div style="margin-top:10px">${Object.entries(byCat).sort((a,b)=>b[1]-a[1]).map(([cat,val])=>`
+      <div class="prog-wrap" style="margin-bottom:10px">
+        <div class="prog-labels"><span>${cat}</span><span class="mono">${fmt(val)}</span></div>
+        <div class="prog-bg"><div class="prog-fill" style="width:${(val/maxCat*100).toFixed(0)}%;background:var(--accent)"></div></div>
+      </div>`).join('')||'<div class="empty-state">No spending logged this month.</div>'}</div>
+  </div>
+  <div class="card"><div class="kpi-label">Month Total</div><div class="kpi-value">${fmt(monthTotal)}</div><div class="kpi-sub">${thisMonth.length} transactions</div></div>
+</div>
+<div class="sch-tbl-wrap"><table class="sch-tbl">
+<thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Amount</th><th></th></tr></thead>
+<tbody>${S.spending.slice(0,100).map(e=>`<tr>
+  <td class="mono">${dateLabel(parseDate(e.date))}</td>
+  <td>${e.desc||'—'}</td>
+  <td><span class="badge b-accent">${e.category}</span></td>
+  <td class="mono c-red">${fmt(e.amount)}</td>
+  <td><div style="display:flex;gap:6px">
+    <button class="btn btn-ghost btn-sm" onclick="openSpendModal('${e.id}')">Edit</button>
+    <button class="btn btn-danger btn-sm" onclick="deleteSpend('${e.id}')">✕</button>
+  </div></td>
+</tr>`).join('')||'<tr><td colspan="5" class="empty-state">No transactions.</td></tr>'}
+</tbody></table></div>`;
+}
+function openSpendModal(editId){
+  const e = editId ? S.spending.find(x=>x.id===editId) : null;
+  openModal(`<h3>${e?'Edit':'Log'} Transaction</h3>
+    <div class="fr">
+      <div class="fg"><label>Date</label><input type="date" id="sp-date" value="${e?e.date:fmtDate(today)}"></div>
+      <div class="fg"><label>Amount (£)</label><input type="number" id="sp-amount" value="${e?e.amount:''}" step="0.01" inputmode="decimal" autofocus></div>
+    </div>
+    <div class="fg"><label>Description</label><input id="sp-desc" value="${e?e.desc:''}"></div>
+    <div class="fg"><label>Category</label><select id="sp-cat">${['Groceries','Dining Out','Transport','Entertainment','Clothing','Health','Subscriptions','Other'].map(c=>`<option ${e?.category===c?'selected':''}>${c}</option>`).join('')}</select></div>
+    <div class="form-actions"><button class="btn btn-primary" onclick="saveSpend('${editId||''}')">Save</button><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+function saveSpend(editId){
+  const date = document.getElementById('sp-date').value;
+  const amount = parseFloat(document.getElementById('sp-amount').value);
+  const desc = document.getElementById('sp-desc').value.trim();
+  const category = document.getElementById('sp-cat').value;
+  if (!date || isNaN(amount) || amount<=0) return;
+  const obj = {id:editId||uid(), date, amount, desc, category};
+  if (editId){ const i=S.spending.findIndex(x=>x.id===editId); if(i>=0) S.spending[i]=obj; }
+  else { S.spending.push(obj); S.spending.sort((a,b)=>b.date.localeCompare(a.date)); }
+  save(); closeModal(); renderSpending();
+}
+function deleteSpend(id){ S.spending=S.spending.filter(e=>e.id!==id); save(); renderSpending(); }
+
+/* ==========================================================================
+   BUDGET
+   ========================================================================== */
+function renderBudget(){
+  const el = document.getElementById('page-budget');
+  const curKey = fmtDate(today).slice(0,7);
+  const thisMonth = S.spending.filter(s => s.date.startsWith(curKey));
+  const catActuals = {};
+  thisMonth.forEach(s => { catActuals[s.category]=(catActuals[s.category]||0)+s.amount; });
+  let totalBudgeted=0, totalActual=0;
+  Object.values(S.budget).forEach(v=>{ totalBudgeted+=v.budgeted||0; totalActual+=v.actual||0; });
+
+  el.innerHTML = `
+<div class="sh"><div><h2>🎯 Budget</h2><p>Monthly targets vs actuals</p></div>
+<button class="btn btn-primary btn-sm" onclick="openBudgetCatModal()">＋ Add Category</button></div>
+<div class="g3" style="margin-bottom:14px">
+  <div class="card"><div class="kpi-label">Budgeted</div><div class="kpi-value">${fmt(totalBudgeted)}</div></div>
+  <div class="card"><div class="kpi-label">Actual</div><div class="kpi-value">${fmt(totalActual)}</div></div>
+  <div class="card"><div class="kpi-label">Remaining</div><div class="kpi-value ${totalBudgeted-totalActual>=0?'c-green':'c-red'}">${fmts(totalBudgeted-totalActual)}</div></div>
+</div>
+<div class="card">${Object.entries(S.budget).map(([k,v]) => {
+  const spendActual = catActuals[k] || 0;
+  const actual = v.actual || spendActual;
+  const diff = v.budgeted - actual;
+  const pct = v.budgeted > 0 ? Math.min(actual/v.budgeted*100, 100) : 0;
+  return `<div class="bcat-row">
+    <div class="bcat-name">${k}</div>
+    <div class="bcat-bars">
+      <div class="prog-bg"><div class="prog-fill" style="width:${pct.toFixed(0)}%;background:${pct>100?'var(--red)':pct>80?'var(--amber)':'var(--green)'}"></div></div>
+      <div style="font-size:9px;color:var(--text3);margin-top:2px">${pct.toFixed(0)}% of budget</div>
+    </div>
+    <div class="bcat-vals">
+      <span style="color:var(--text2)">${fmt(v.budgeted||0)}</span>
+      <span><input type="number" step="0.01" inputmode="decimal" value="${actual}" style="width:80px;padding:4px 6px;font-size:11px" onchange="updateBudgetActual('${k}',this.value)"></span>
+      <span class="${diff>=0?'c-green':'c-red'}">${fmts(diff)}</span>
+    </div>
+  </div>`;
+}).join('')}</div>`;
+}
+function updateBudgetActual(key,val){ if(S.budget[key]) S.budget[key].actual=parseFloat(val)||0; save(); }
+function openBudgetCatModal(){
+  openModal(`<h3>Add Budget Category</h3>
+    <div class="fg"><label>Name</label><input id="bc-name" autofocus></div>
+    <div class="fg"><label>Monthly Budget (£)</label><input type="number" id="bc-budget" step="0.01" inputmode="decimal"></div>
+    <div class="form-actions"><button class="btn btn-primary" onclick="saveBudgetCat()">Add</button><button class="btn btn-ghost" onclick="closeModal()">Cancel</button></div>`);
+}
+function saveBudgetCat(){
+  const name = document.getElementById('bc-name').value.trim();
+  const budget = parseFloat(document.getElementById('bc-budget').value) || 0;
+  if (!name) return;
+  S.budget[name] = {budgeted:budget, actual:0};
+  save(); closeModal(); renderBudget();
+}
+
+/* ==========================================================================
+   RESET
+   ========================================================================== */
+function resetToDefaults(){
+  if (!confirm('Wipe ALL data and start completely blank?')) return;
+  try { localStorage.clear(); } catch(e){}
+  const blank = JSON.parse(JSON.stringify(DEFAULT_STATE));
+  Object.keys(S).forEach(k => delete S[k]);
+  Object.assign(S, blank);
+  invalidateFlow();
+  cfPage = 0;
+  // Clear Firebase too
+  if (_currentUser){
+    db.collection('users').doc(_currentUser.uid).delete().catch(()=>{});
+  }
+  renderDashboard();
+  alert('✅ All data wiped. App is now blank.');
+}
+
+/* INIT */
+
+const THEME_KEY = 'fcc_theme';
+function applyTheme(theme, persist){
+  if(theme === 'light'){ document.documentElement.classList.add('light'); document.getElementById('theme-toggle').textContent = '🌙'; }
+  else { document.documentElement.classList.remove('light'); document.getElementById('theme-toggle').textContent = '☀️'; }
+  // Always persist to localStorage immediately
+  try { localStorage.setItem(THEME_KEY, theme); } catch(e){}
+  if(persist){
+    // Write theme to its own Firebase path (bypasses debounce — immediate write)
+    if(_firebaseReady && _fbUser){
+      try { _fbDb.ref(userDbPath() + '_theme').set(theme); } catch(e){}
+    }
+    // Also keep it in S.settings as a backup
+    if(typeof S !== 'undefined' && S.settings){
+      S.settings.theme = theme;
+      save();
+    }
+  }
+}
+function toggleTheme(){
+  const isLight = document.documentElement.classList.contains('light');
+  applyTheme(isLight ? 'dark' : 'light', true);
+  renderSettings(); // refresh settings page if open
+}
+try { const saved = localStorage.getItem(THEME_KEY); if(saved) applyTheme(saved, false); } catch(e){}
+
+cfPage = 0;
+// Set version badge in topbar
+try { const vb = document.getElementById('version-badge'); if(vb) vb.textContent = FCC_VERSION; } catch(e){}
+
+// Check if Firebase has been configured (placeholder values = not yet set up)
+const firebaseConfigured = FIREBASE_CONFIG.apiKey !== 'YOUR_API_KEY';
+
+if (firebaseConfigured){
+  // Full Firebase mode — show auth overlay, load from cloud
+  initFirebase();
+} else {
+  // Firebase not yet configured — fall back to localStorage silently
+  console.warn('Firebase not configured — using localStorage. See FIREBASE_CONFIG in the code.');
+  loadFromLocalStorage();
+  startApp();
+}
+</script>
+</body>
+</html>
