@@ -1500,8 +1500,16 @@ function downloadCashflowCSV(){
   }
 
   const flow = getFlow();
-  const windowStart = addMonths(today, -1);
-  const rows = flow.filter(r => r.dateObj >= windowStart);
+
+  // Start the export from the most recent checkpoint (or today-7 if no checkpoints).
+  // This avoids exporting weeks of £0.00 rows before the first real anchor.
+  const checkpointDates = Object.keys(S.checkpoints).sort();
+  const latestCP = checkpointDates.length > 0 ? checkpointDates[checkpointDates.length - 1] : null;
+  const exportStart = latestCP
+    ? (() => { const d = parseDate(latestCP); d.setDate(d.getDate() - 1); return d; })() // one day before checkpoint so anchor row is included
+    : addMonths(today, -1);
+
+  const rows = flow.filter(r => r.dateObj >= exportStart);
   if (rows.length === 0) { alert('No data to export.'); return; }
 
   // ── Sheet 1: Cash Flow ────────────────────────────────────────────────────
@@ -1518,18 +1526,24 @@ function downloadCashflowCSV(){
 
   rows.forEach((r, i) => {
     const c   = r.cols;
-    const excelDate = r.dateObj.toLocaleDateString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric'});
+    const excelDate = r.date; // ISO YYYY-MM-DD — consistent format for pivot MINIFS matching
     const dayName   = r.dateObj.toLocaleDateString('en-GB',{weekday:'short'});
     const isToday   = r.date === fmtDate(today);
     const rowNum    = i + 2; // Excel row number (1=header, 2=first data)
 
-    // Balance: first row is static (the actual computed balance as anchor),
-    // subsequent rows use a live formula so editing any cell recalculates forward.
-    // Formula: prev_balance + MoneyIn - Spending - CreditCard - Loans - Bills
-    //                       - HouseAcct - JointSav - EmergFund - T212 - PersonalSav
-    const balCell = i === 0
-      ? r.runBal  // static number — anchor point
+    // Balance column logic:
+    // - Row 1 (first exported row): always static — the actual FCC computed balance
+    // - Any row with a checkpoint: static — the checkpoint value anchors the chain
+    // - All other rows: live formula chaining from the row above
+    // This means the formula resets at every checkpoint, just like FCC does internally.
+    const checkpoint = S.checkpoints[r.date];
+    const isAnchorRow = i === 0 || checkpoint !== undefined;
+    const balCell = isAnchorRow
+      ? r.runBal  // static — FCC's computed balance already incorporates the checkpoint
       : { f: `M${rowNum-1}+C${rowNum}-D${rowNum}-E${rowNum}-F${rowNum}-G${rowNum}-H${rowNum}-I${rowNum}-J${rowNum}-K${rowNum}-L${rowNum}` };
+
+    // Mark checkpoint rows in the Notes column so they're visible in Excel
+    const noteVal = checkpoint !== undefined ? `⚓ Checkpoint: ${fmt(checkpoint)}` : '';
 
     wsData.push([
       excelDate,
@@ -1545,7 +1559,7 @@ function downloadCashflowCSV(){
       c.t212            || '',
       c.personalSavings || '',
       balCell,
-      '' // Notes/override — user fills this in, imports back
+      noteVal
     ]);
   });
 
@@ -1603,14 +1617,14 @@ function downloadCashflowCSV(){
   });
 
   months.forEach((m, i) => {
-    const pivRow = i + 2;
-    // MINIFS formula: min of Balance column where Date column is in this month/year
-    // We use TEXT() comparison on the date string to match month
-    const monthStr = m.date.toLocaleDateString('en-GB',{month:'short',year:'numeric'});
-    // Use MINIFS on the balance column filtering by month text match
+    const pivRow   = i + 2;
     const lastDataRow = rows.length + 1;
-    const minFormula = { f: `MINIFS('${cfSheetName}'!M2:M${lastDataRow},'${cfSheetName}'!A2:A${lastDataRow},"*${m.key.split(' ')[0]}*",'${cfSheetName}'!A2:A${lastDataRow},"*${m.date.getFullYear()}*")` };
-    // RAG status formula
+    const mm = String(m.date.getMonth() + 1).padStart(2, '0');
+    const yyyy = m.date.getFullYear();
+    // Dates in the CF sheet are ISO YYYY-MM-DD — match on the YYYY-MM prefix
+    const prefix = `${yyyy}-${mm}`;
+    // MINIFS: balance column where date starts with YYYY-MM
+    const minFormula    = { f: `MINIFS('${cfSheetName}'!M2:M${lastDataRow},'${cfSheetName}'!A2:A${lastDataRow},"${prefix}*")` };
     const statusFormula = { f: `IF(B${pivRow}<250,"🔴 Danger",IF(B${pivRow}<600,"🟡 Caution","🟢 Safe"))` };
 
     pivotData.push([ m.key, minFormula, statusFormula ]);
