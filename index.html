@@ -8,9 +8,10 @@
 <script>
   // ── VERSION CONTROL ──────────────────────────────────────────
   // Update this whenever deploying a new version to Netlify
-  const FCC_VERSION = 'v13.12';
+  const FCC_VERSION = 'v13.13';
   const FCC_VERSION_DATE = '2026-04-29';
   const FCC_CHANGELOG = [
+    { v:'v13.13', date:'2026-04-30', note:'Savings: manual deposit button (↑) with history; dashboard: min balance card clickable with month-by-month breakdown modal; net worth shows today date' },
     { v:'v13.12', date:'2026-04-30', note:'Fix: savings extrapolation uses trailing 3-month average not global average — zero contributions at CF window end = no phantom dashed growth' },
     { v:'v13.11', date:'2026-04-30', note:'Fix: savings extrapolation stops exactly at target (no overshoot); extrapolated segment renders faded+dashed vs solid CF-backed data' },
     { v:'v13.10', date:'2026-04-30', note:'Fix: savings chart no longer cuts short when target is hit mid-window; extrapolation only fires with positive avg contributions (stops phantom post-CF growth)' },
@@ -304,6 +305,8 @@ input[type="number"]{font-family:var(--mono)}
 .btn-danger:hover{background:rgba(255,84,112,0.18)}
 .btn-amber{background:var(--amber-dim);color:var(--amber);border:1px solid rgba(240,167,50,0.15)}
 .btn-amber:hover{background:rgba(240,167,50,0.22)}
+.btn-green{background:rgba(34,212,126,0.12);color:var(--green);border:1px solid rgba(34,212,126,0.2)}
+.btn-green:hover{background:rgba(34,212,126,0.22)}
 .btn-purple{background:rgba(160,124,255,0.10);color:var(--purple);border:1px solid rgba(160,124,255,0.2)}
 
 /* Choice buttons (override modal) */
@@ -992,6 +995,67 @@ document.addEventListener('keydown', e => {
    ========================================================================== */
 function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 
+function openMinBalModal(){
+  const flow = getFlow();
+  const monthlyMins = buildMonthlyMinBalances(flow);
+  const months12 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const year = today.getFullYear();
+
+  // Build full-year rows
+  const rows = months12.map((name, i) => {
+    const k = `${year}-${String(i+1).padStart(2,'0')}`;
+    const val = monthlyMins[k];
+    const isCur = i === today.getMonth();
+    const isPast = i < today.getMonth();
+    return { name, val, isCur, isPast };
+  });
+
+  const known = rows.filter(r => r.val !== null && r.val !== undefined);
+  const minRow = known.length ? known.reduce((a,b) => a.val < b.val ? a : b) : null;
+  const avg = known.length ? known.reduce((s,r) => s + r.val, 0) / known.length : 0;
+
+  const rowsHtml = rows.map(r => {
+    if (r.val === null || r.val === undefined) {
+      return `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);opacity:0.4">
+        <span style="font-size:13px">${r.name} ${year}</span>
+        <span style="font-size:12px;color:var(--text3)">—</span>
+      </div>`;
+    }
+    const isMin = minRow && r.name === minRow.name;
+    const col = r.val < 250 ? 'var(--red)' : r.val < 600 ? 'var(--amber)' : 'var(--green)';
+    const badge = r.isCur ? ' <span style="font-size:9px;background:var(--accent);color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle">NOW</span>' : '';
+    const minBadge = isMin ? ' <span style="font-size:9px;background:var(--amber);color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle">LOWEST</span>' : '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);${r.isCur?'font-weight:700':''}">
+      <span style="font-size:13px">${r.name} ${year}${badge}${minBadge}</span>
+      <span class="mono" style="font-size:14px;color:${col}">${fmt(r.val)}</span>
+    </div>`;
+  }).join('');
+
+  openModal(`
+    <h3>📅 Monthly Minimum Balances · ${year}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Lowest projected current account balance in each month.</p>
+    <div style="display:flex;gap:16px;margin-bottom:16px">
+      <div style="flex:1;background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">YEAR AVERAGE</div>
+        <div class="mono" style="font-size:18px;font-weight:700;color:var(--accent)">${fmt(avg)}</div>
+      </div>
+      <div style="flex:1;background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">LOWEST MONTH</div>
+        <div class="mono" style="font-size:18px;font-weight:700;color:var(--amber)">${minRow ? minRow.name : '—'}</div>
+      </div>
+      <div style="flex:1;background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+        <div style="font-size:10px;color:var(--text3);margin-bottom:4px">LOWEST VALUE</div>
+        <div class="mono" style="font-size:18px;font-weight:700;color:${minRow&&minRow.val<250?'var(--red)':minRow&&minRow.val<600?'var(--amber)':'var(--green)'}">${minRow ? fmt(minRow.val) : '—'}</div>
+      </div>
+    </div>
+    <div style="max-height:50vh;overflow-y:auto">${rowsHtml}</div>
+    <div class="form-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" onclick="closeModal();document.querySelector('[data-page=cashflow]')?.click()">Go to Cash Flow</button>
+    </div>
+  `);
+}
+
 function renderDashboard(){
   const flow = getFlow();
   const monthlyMins = buildMonthlyMinBalances(flow);
@@ -1042,9 +1106,9 @@ function renderDashboard(){
     <div class="kpi-sub">${S.debtCards.length} cards · excl. mortgage</div>
   </div>
   <div class="card">
-    <div class="kpi-label">Net Worth</div>
+    <div class="kpi-label">Net Worth · Today</div>
     <div class="kpi-value ${netWorth>=0?'c-green':'c-red'}">${fmts(netWorth)}</div>
-    <div class="kpi-sub">${netWorth<0?'⚠️ Negative — climbing':'✅ Positive'}</div>
+    <div class="kpi-sub">${netWorth<0?'⚠️ Negative — climbing':'✅ Positive'} · ${today.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</div>
   </div>
 </div>
 
@@ -1065,9 +1129,10 @@ function renderDashboard(){
       <div class="cd-num" style="font-size:15px;color:var(--amber)">${beDate?beDate.toLocaleDateString('en-GB',{month:'short',year:'numeric'}):'—'}</div>
       <div class="cd-label">Net Worth = £0</div>
     </div>
-    <div class="cd-box">
+    <div class="cd-box" onclick="openMinBalModal()" style="cursor:pointer;position:relative" title="Tap to see month-by-month breakdown">
       <div class="cd-num ${curMonMin<250?'c-red':curMonMin<600?'c-amber':'c-green'}" style="font-size:18px">${fmt(curMonMin)}</div>
       <div class="cd-label">Min Balance This Month</div>
+      <div style="font-size:9px;color:var(--text3);margin-top:2px">tap for details</div>
     </div>
   </div>
 </div>
@@ -2364,7 +2429,13 @@ function computeLivePotBalance(pot){
     return s;
   }, 0);
 
-  return +(pot.balance + contrib - withdrawals).toFixed(2);
+  const deposits = (pot.deposits || []).reduce((s, d) => {
+    const dd = parseDate(d.date);
+    if (dd >= anchorDate && dd <= today) return s + d.amount;
+    return s;
+  }, 0);
+
+  return +(pot.balance + contrib + deposits - withdrawals).toFixed(2);
 }
 
 function setDebtStrategy(s){ S.debtStrategy = s; save(); renderDebt(); }
@@ -2412,6 +2483,11 @@ function computePotTargetDate(pot, liveBalance, flow){
     if (pot.withdrawals){
       pot.withdrawals.forEach(w => {
         if (w.date === r.date) running = Math.max(0, running - w.amount);
+      });
+    }
+    if (pot.deposits){
+      pot.deposits.forEach(d => {
+        if (d.date === r.date) running = running + d.amount;
       });
     }
 
@@ -2582,7 +2658,8 @@ function renderSavings(){
         </div>
         <div style="display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0">
           <button class="btn btn-ghost btn-sm" onclick="openSavingsModal('${p.id}')">Edit</button>
-          <button class="btn btn-amber btn-sm" onclick="openWithdrawModal('${p.id}')">↓</button>
+          <button class="btn btn-green btn-sm" onclick="openDepositModal('${p.id}')" title="Log a manual deposit">↑</button>
+          <button class="btn btn-amber btn-sm" onclick="openWithdrawModal('${p.id}')" title="Log a withdrawal">↓</button>
           <button class="btn btn-danger btn-sm" onclick="deleteSavings('${p.id}')">✕</button>
         </div>
       </div>
@@ -2601,7 +2678,14 @@ function renderSavings(){
         <canvas id="${chartId}"></canvas>
       </div>
 
-      ${withdrawTotal>0?`<div style="font-size:10px;color:var(--amber);margin-top:6px">↓ ${fmt(withdrawTotal)} withdrawn since anchor</div>`:''}
+      ${(() => {
+        const depTotal = (p.deposits||[]).reduce((s,d)=>s+d.amount,0);
+        const wdTotal  = (p.withdrawals||[]).reduce((s,w)=>s+w.amount,0);
+        return [
+          depTotal>0?`<div style="font-size:10px;color:var(--green);margin-top:6px">↑ ${fmt(depTotal)} deposited since anchor</div>`:'',
+          wdTotal>0 ?`<div style="font-size:10px;color:var(--amber);margin-top:2px">↓ ${fmt(wdTotal)} withdrawn since anchor</div>` :''
+        ].join('');
+      })()}
       ${projection?.beyondForecast?`<div style="font-size:9px;color:var(--text3);margin-top:4px">† Beyond forecast window — extend the TO year in Settings to see full projection</div>`:''}
     </div>`;
   }).join('');
@@ -2828,6 +2912,47 @@ function saveWithdrawal(potId){
   if (!p.withdrawals) p.withdrawals = [];
   p.withdrawals.push({ id:uid(), date, amount, note });
   p.withdrawals.sort((a,b) => a.date.localeCompare(b.date));
+  save(); closeModal(); renderSavings();
+}
+
+function openDepositModal(potId){
+  const p = S.savingsPots.find(s=>s.id===potId);
+  if (!p) return;
+  const liveBalance = computeLivePotBalance(p);
+  const history = (p.deposits||[]).slice().reverse().slice(0,5);
+  openModal(`
+    <h3>↑ Deposit into ${p.name}</h3>
+    <p style="font-size:12px;color:var(--text2);margin-bottom:14px">Current balance: <strong class="mono">${fmt(liveBalance)}</strong></p>
+    <div class="fr">
+      <div class="fg"><label>Amount (£)</label><input type="number" id="dep-amount" step="0.01" inputmode="decimal" autofocus></div>
+      <div class="fg"><label>Date</label><input type="date" id="dep-date" value="${fmtDate(today)}"></div>
+    </div>
+    <div class="fg"><label>Note (optional)</label><input id="dep-note" placeholder="e.g. Wife's monthly contribution"></div>
+    ${history.length ? `
+    <div style="margin-top:12px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--text3);margin-bottom:6px">Recent deposits</div>
+      ${history.map(d=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>${dateLabel(parseDate(d.date))} ${d.note?'· '+d.note:''}</span>
+        <span class="mono c-green">+${fmt(d.amount)}</span>
+      </div>`).join('')}
+    </div>` : ''}
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveDeposit('${potId}')">Log Deposit</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+  `);
+}
+
+function saveDeposit(potId){
+  const amount = parseFloat(document.getElementById('dep-amount').value);
+  const date   = document.getElementById('dep-date').value;
+  const note   = document.getElementById('dep-note').value.trim();
+  if (isNaN(amount) || amount <= 0 || !date) return alert('Enter a valid amount and date.');
+  const p = S.savingsPots.find(s=>s.id===potId);
+  if (!p) return;
+  if (!p.deposits) p.deposits = [];
+  p.deposits.push({ id:uid(), date, amount, note });
+  p.deposits.sort((a,b) => a.date.localeCompare(b.date));
   save(); closeModal(); renderSavings();
 }
 
