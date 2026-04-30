@@ -8,9 +8,10 @@
 <script>
   // ── VERSION CONTROL ──────────────────────────────────────────
   // Update this whenever deploying a new version to Netlify
-  const FCC_VERSION = 'v13.17';
+  const FCC_VERSION = 'v13.18';
   const FCC_VERSION_DATE = '2026-04-29';
   const FCC_CHANGELOG = [
+    { v:'v13.18', date:'2026-04-30', note:'Cash flow lands on today by default; window starts from 1st of previous calendar month; old data still accessible by paging back' },
     { v:'v13.17', date:'2026-04-30', note:'Overrides: Promote & Clear converts overrides to permanent one-offs keeping CF identical; import blank/0 now zeroes scheduled transactions' },
     { v:'v13.16', date:'2026-04-30', note:'Export: XLSX workbook with live balance formula (row 2 anchored, row 3+ =prev+in-out), savings contribution columns included, monthly minimum pivot on Sheet 2' },
     { v:'v13.15', date:'2026-04-30', note:'Fix: monthly min balance spark chart fully tappable on mobile — header, container and each bar all open breakdown modal' },
@@ -1975,7 +1976,7 @@ function renderCashFlow(){
   <div id="tx-schedule-table"></div>
 </div>`;
 
-  renderCFTable();
+  jumpToToday();
   renderTxScheduleTable();
   document.getElementById('ob-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') setOB();
@@ -1990,9 +1991,11 @@ function setOB(){
 function cfNav(dir){ cfPage += dir; if (cfPage<0) cfPage=0; renderCFTable(); }
 function jumpToToday(){
   const flow = getFlow();
-  // Only count from today's slice window
-  const todayFlow = flow.filter(r => r.dateObj >= addMonths(today,-1));
-  cfPage = 0;
+  const windowStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const visible = flow.filter(r => r.dateObj >= windowStart);
+  // Find which page today falls on
+  const todayIdx = visible.findIndex(r => r.date === fmtDate(today));
+  cfPage = todayIdx >= 0 ? Math.floor(todayIdx / CF_PER_PAGE) : 0;
   renderCFTable();
   setTimeout(() => {
     const el = document.querySelector('tr.today-row');
@@ -2018,8 +2021,8 @@ function refreshCFInPlace(){
 function renderCFTable(){
   CF_COLS = getCFCols();
   const flow = getFlow();
-  // Only show from one month before today onwards
-  const windowStart = addMonths(today, -1);
+  // Show from start of previous calendar month onwards
+  const windowStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
   const visible = flow.filter(r => r.dateObj >= windowStart);
   const total = visible.length;
   const maxPage = Math.max(0, Math.ceil(total/CF_PER_PAGE)-1);
