@@ -8,9 +8,11 @@
 <script>
   // ── VERSION CONTROL ──────────────────────────────────────────
   // Update this whenever deploying a new version to Netlify
-  const FCC_VERSION = 'v13.21';
+  const FCC_VERSION = 'v13.23';
   const FCC_VERSION_DATE = '2026-05-01';
   const FCC_CHANGELOG = [
+    { v:'v13.23', date:'2026-05-01', note:'Fix: debt allocation table now starts from the current month (May) not next month; card tiles show correct this-month allocation' },
+    { v:'v13.22', date:'2026-05-01', note:'Fix: Monthly Report renders in-app overlay instead of popup — works in Chrome and DuckDuckGo without popup permission' },
     { v:'v13.21', date:'2026-05-01', note:'Monthly Report: generates a beautiful printable PDF with balance trend, 12-month net worth projection, savings pots, and debt breakdown' },
     { v:'v13.20', date:'2026-05-01', note:'Fix: Promote & Clear no longer duplicates recurring transactions; single-event cells now offer Edit or Add Another' },
     { v:'v13.19', date:'2026-05-01', note:'Fix: today recalculated fresh on every render — app no longer stays on yesterday\'s date if left open overnight' },
@@ -190,6 +192,13 @@ body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(
 .prog-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:3px}
 .prog-bg{background:var(--surface3);border-radius:99px;height:5px;overflow:hidden}
 .prog-fill{height:100%;border-radius:99px;transition:width .5s ease}
+
+/* REPORT PRINT */
+@media print{
+  body > *:not(#report-overlay){ display:none!important }
+  #report-overlay{ position:static!important;overflow:visible!important }
+  .no-print{ display:none!important }
+}
 
 /* COUNTDOWN */
 .countdown-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px}
@@ -493,6 +502,11 @@ hr.div{border:none;border-top:1px solid var(--border);margin:16px 0}
     <button class="modal-close" onclick="closeModal()">✕</button>
     <div id="modal-content"></div>
   </div>
+</div>
+
+<!-- Full-screen report overlay -->
+<div id="report-overlay" style="display:none;position:fixed;inset:0;z-index:600;background:#f3f4f8;overflow-y:auto;-webkit-overflow-scrolling:touch">
+  <div id="report-content"></div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -3318,7 +3332,7 @@ function runSnowball(budget, cards){
 
   const months = [];
   const MAX_MONTHS = 360;
-  const startMonth = 1; // current month already paid, start from next
+  const startMonth = 0; // start from current month
 
   // ── Calculate attack order ONCE upfront ──
   // Use the card's stored standard payment if set (above the minimum), else the minimum.
@@ -3484,6 +3498,7 @@ function renderDebt(){
     const clearDt  = clearMo !== null ? addMonths(today, clearMo+1) : null;
 
     // This month's allocation from the plan
+    // plan[0] = current month (startMonth=0)
     const thisMonthAlloc = plan.length ? (plan[0].allocations[c.id] || 0) : 0;
 
     let dealAlert = '';
@@ -3563,7 +3578,7 @@ function renderDebt(){
 
   const tBody = `<tbody>${tableMonths.map(snap => {
     const totalRem = +Object.values(snap.balances).reduce((a,b)=>a+b,0).toFixed(2);
-    const isNow = snap.month === 1;
+    const isNow = snap.month === 0;
     return `<tr style="${isNow ? 'background:var(--accent-glow)' : ''}">
       <td class="mono" style="font-weight:${isNow ? 700 : 400}">
         ${snap.date.toLocaleDateString('en-GB',{month:'short',year:'2-digit'})}
@@ -3992,9 +4007,12 @@ function generateMonthlyReport(){
 <div class="print-bar no-print">
   <div>
     <h2>FCC Monthly Report · ${reportMonth}</h2>
-    <p>When the print dialog opens, select <strong>Save as PDF</strong> and choose A4 paper size</p>
+    <p>Tap <strong>Save as PDF</strong> → choose A4 · or share/screenshot on mobile</p>
   </div>
-  <button class="btn-print" onclick="window.print()">🖨️ Save as PDF</button>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn-print" onclick="window.print()">🖨️ Save as PDF</button>
+    <button onclick="closeReport()" style="background:none;border:1px solid #dde0ec;border-radius:7px;padding:9px 14px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;color:#5a6080">✕ Close</button>
+  </div>
 </div>
 
 <div class="wrap">
@@ -4134,10 +4152,18 @@ function generateMonthlyReport(){
 </body>
 </html>`;
 
-  const win = window.open('', '_blank');
-  if (!win) { alert('Pop-up blocked — please allow pop-ups for this site and try again.'); return; }
-  win.document.write(html);
-  win.document.close();
+  // Render into full-screen overlay — no popup needed, works in all browsers
+  const overlay = document.getElementById('report-overlay');
+  const container = document.getElementById('report-content');
+  container.innerHTML = html;
+  overlay.style.display = 'block';
+  overlay.scrollTop = 0;
+  document.body.style.overflow = 'hidden';
+}
+
+function closeReport(){
+  document.getElementById('report-overlay').style.display = 'none';
+  document.body.style.overflow = '';
 }
 
 function renderSettings(){
