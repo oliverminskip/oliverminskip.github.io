@@ -8,9 +8,10 @@
 <script>
   // ── VERSION CONTROL ──────────────────────────────────────────
   // Update this whenever deploying a new version to Netlify
-  const FCC_VERSION = 'v13.20';
+  const FCC_VERSION = 'v13.21';
   const FCC_VERSION_DATE = '2026-05-01';
   const FCC_CHANGELOG = [
+    { v:'v13.21', date:'2026-05-01', note:'Monthly Report: generates a beautiful printable PDF with balance trend, 12-month net worth projection, savings pots, and debt breakdown' },
     { v:'v13.20', date:'2026-05-01', note:'Fix: Promote & Clear no longer duplicates recurring transactions; single-event cells now offer Edit or Add Another' },
     { v:'v13.19', date:'2026-05-01', note:'Fix: today recalculated fresh on every render — app no longer stays on yesterday\'s date if left open overnight' },
     { v:'v13.18', date:'2026-04-30', note:'Cash flow lands on today by default; window starts from 1st of previous calendar month; old data still accessible by paging back' },
@@ -3725,6 +3726,420 @@ function deleteDebt(id){ if(confirm('Delete card?')){ S.debtCards=S.debtCards.fi
 /* ==========================================================================
    SETTINGS PAGE
    ========================================================================== */
+
+function generateMonthlyReport(){
+  const today = getToday();
+  const flow  = getFlow();
+  const monthlyMins = buildMonthlyMinBalances(flow);
+
+  // ── Core metrics ──────────────────────────────────────────────────────
+  const todayRow   = flow.find(r => r.date === fmtDate(today));
+  const currentBal = todayRow ? todayRow.runBal : S.openingBalance;
+  const totalSavings = S.savingsPots.reduce((s,p) => s + computeLivePotBalance(p), 0);
+  const totalDebt    = S.debtCards.reduce((s,c) => s + c.balance, 0);
+  const netWorth     = currentBal + totalSavings - totalDebt;
+
+  // Monthly min balance for current month
+  const curMonKey = fmtDate(today).slice(0,7);
+  const curMonMin = monthlyMins[curMonKey] !== undefined ? monthlyMins[curMonKey] : currentBal;
+
+  // ── Last 6 months of min balances ─────────────────────────────────────
+  const last6 = [];
+  for (let i = 5; i >= 0; i--){
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const k = fmtDate(d).slice(0,7);
+    const label = d.toLocaleDateString('en-GB',{month:'short',year:'2-digit'});
+    last6.push({ label, val: monthlyMins[k] !== undefined ? monthlyMins[k] : null });
+  }
+
+  // ── Next 12 months net worth projection ───────────────────────────────
+  const debtMonthly = getMonthlyDebtBudget();
+  const POT_CF_MAP2 = { jointSavings:'Joint Savings', emergencyFund:'Emergency Fund', t212:'T212', personalSavings:'Personal Savings' };
+  const runningSav = {};
+  Object.keys(POT_CF_MAP2).forEach(k => runningSav[k] = 0);
+  const nwProjection = []; // [{label, bal, savings, debt, nw}]
+  let lastMo2 = -1;
+  flow.filter(r => r.dateObj >= today).forEach(r => {
+    Object.keys(POT_CF_MAP2).forEach(cfType => {
+      if (r.cols[cfType]) runningSav[cfType] = (runningSav[cfType]||0) + r.cols[cfType];
+    });
+    const mo = r.dateObj.getMonth() + r.dateObj.getFullYear() * 12;
+    if (mo !== lastMo2 && nwProjection.length < 13){
+      lastMo2 = mo;
+      const monthsDiff = (r.dateObj - today) / 86400000 / 30.44;
+      const projSavings = S.savingsPots.reduce((sum, p) => {
+        const cfType = potCFType(p);
+        const contrib = cfType ? (runningSav[cfType]||0) : 0;
+        return sum + Math.max(0, computeLivePotBalance(p) + contrib);
+      }, 0) + S.savingsPots.reduce((sum,p) => (!potCFType(p) && p.monthly > 0 ? sum + p.monthly : sum),0) * monthsDiff;
+      const projDebt = Math.max(0, totalDebt - debtMonthly * monthsDiff);
+      nwProjection.push({
+        label: r.dateObj.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}),
+        bal: +r.runBal.toFixed(2),
+        savings: +projSavings.toFixed(2),
+        debt: +projDebt.toFixed(2),
+        nw: +(r.runBal + projSavings - projDebt).toFixed(2)
+      });
+    }
+  });
+
+  // ── Savings pots summary ──────────────────────────────────────────────
+  const potRows = S.savingsPots.map(p => {
+    const live = computeLivePotBalance(p);
+    const pct  = p.target > 0 ? Math.min(1, live / p.target) : 0;
+    const proj = computePotTargetDate(p, live, flow);
+    const eta  = proj ? proj.toLocaleDateString('en-GB',{month:'short',year:'numeric'}) : '—';
+    return { name:p.name, live, target:p.target, pct, eta, color: p.color||'#4f8ef7' };
+  });
+
+  // ── Income & outgoings this month ─────────────────────────────────────
+  const thisMonStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const thisMonEnd   = new Date(today.getFullYear(), today.getMonth()+1, 0);
+  let monthIn = 0, monthOut = 0;
+  flow.forEach(r => {
+    if (r.dateObj < thisMonStart || r.dateObj > thisMonEnd) return;
+    r.items.forEach(e => {
+      if (e.type === 'moneyIn') monthIn += e.amount;
+      else monthOut += e.amount;
+    });
+  });
+
+  // ── Debt cards ────────────────────────────────────────────────────────
+  const dfDate = computeDebtFreeDate();
+  const dfStr  = dfDate ? dfDate.toLocaleDateString('en-GB',{month:'long',year:'numeric'}) : null;
+
+  // ── Helpers ───────────────────────────────────────────────────────────
+  const f = v => '£' + Math.abs(v).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const rag = v => v >= 600 ? '#0aad60' : v >= 250 ? '#d4870a' : '#e83050';
+  const nwColor = v => v >= 0 ? '#0aad60' : '#e83050';
+  const sign = v => v >= 0 ? '+' : '';
+
+  // ── Chart helpers (SVG sparklines & bars) ─────────────────────────────
+  function svgBar(data, w=400, h=80){
+    if (!data.length) return '';
+    const vals = data.map(d => d.val !== null ? d.val : 0);
+    const max  = Math.max(...vals, 1);
+    const min  = Math.min(...vals, 0);
+    const range = max - min || 1;
+    const barW = Math.floor((w - (data.length-1)*4) / data.length);
+    const bars = data.map((d,i) => {
+      const bh = Math.max(4, ((d.val||0) - min) / range * (h - 16));
+      const by = h - bh;
+      const col = d.val !== null ? rag(d.val) : '#9099b8';
+      const x   = i * (barW + 4);
+      return `<rect x="${x}" y="${by}" width="${barW}" height="${bh}" rx="3" fill="${col}" opacity="0.85"/>
+              <text x="${x + barW/2}" y="${h+14}" text-anchor="middle" font-size="9" fill="#5a6080">${d.label}</text>`;
+    }).join('');
+    return `<svg viewBox="0 0 ${w} ${h+20}" width="100%" style="display:block">${bars}</svg>`;
+  }
+
+  function svgLine(points, w=500, h=100, color='#2d6ef5'){
+    if (points.length < 2) return '';
+    const vals = points.map(p => p.y);
+    const max  = Math.max(...vals);
+    const min  = Math.min(...vals);
+    const range = max - min || 1;
+    const xStep = (w-20) / (points.length-1);
+    const toX = i => 10 + i * xStep;
+    const toY = v => 10 + (1 - (v - min)/range) * (h-20);
+    // Zero line
+    const zeroY = toY(0);
+    const zeroLine = (min < 0 && max > 0) ? `<line x1="0" y1="${zeroY}" x2="${w}" y2="${zeroY}" stroke="#dde0ec" stroke-width="1" stroke-dasharray="4,3"/>` : '';
+    // Path with color segments
+    let pathD = `M ${toX(0)} ${toY(points[0].y)}`;
+    for (let i=1; i<points.length; i++) pathD += ` L ${toX(i)} ${toY(points[i].y)}`;
+    // Fill gradient
+    const fillD = pathD + ` L ${toX(points.length-1)} ${h} L ${toX(0)} ${h} Z`;
+    const gradId = 'g'+Math.random().toString(36).slice(2,7);
+    return `<svg viewBox="0 0 ${w} ${h}" width="100%" style="display:block">
+      <defs>
+        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${color}" stop-opacity="0.18"/>
+          <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      ${zeroLine}
+      <path d="${fillD}" fill="url(#${gradId})"/>
+      <path d="${pathD}" stroke="${color}" stroke-width="2" fill="none"/>
+      ${points.filter((_,i)=>i===0||i===points.length-1).map((p,idx)=>`
+        <circle cx="${toX(idx===0?0:points.length-1)}" cy="${toY(p.y)}" r="3" fill="${color}"/>
+      `).join('')}
+    </svg>`;
+  }
+
+  // ── Build the NW line points ──────────────────────────────────────────
+  const nwLinePoints = nwProjection.map(p => ({ y: p.nw }));
+  const nwLineColor  = nwProjection.length && nwProjection[nwProjection.length-1].nw > (nwProjection[0]?.nw||0) ? '#0aad60' : '#2d6ef5';
+  const nwStart = nwProjection[0]?.nw || 0;
+  const nwEnd   = nwProjection[nwProjection.length-1]?.nw || 0;
+  const nwChange = nwEnd - nwStart;
+
+  // ── Month name ────────────────────────────────────────────────────────
+  const reportMonth = today.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+
+  // ── Build pot rows HTML ───────────────────────────────────────────────
+  const potRowsHTML = potRows.length ? potRows.map(p => `
+    <tr>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color};margin-right:8px;vertical-align:middle"></span>${p.name}</td>
+      <td style="text-align:right;font-family:monospace">${f(p.live)}</td>
+      <td style="text-align:right;font-family:monospace">${f(p.target)}</td>
+      <td style="text-align:right">
+        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
+          <div style="width:60px;height:6px;background:#eef0f6;border-radius:99px;overflow:hidden">
+            <div style="width:${Math.round(p.pct*100)}%;height:100%;background:${p.color};border-radius:99px"></div>
+          </div>
+          <span style="font-size:11px;color:#5a6080">${Math.round(p.pct*100)}%</span>
+        </div>
+      </td>
+      <td style="text-align:right;color:#5a6080;font-size:12px">${p.eta}</td>
+    </tr>`).join('') : '<tr><td colspan="5" style="color:#9099b8;font-style:italic">No savings pots configured</td></tr>';
+
+  // ── Debt cards HTML ───────────────────────────────────────────────────
+  const debtRowsHTML = S.debtCards.length ? S.debtCards.map(c => `
+    <tr>
+      <td>${c.name}</td>
+      <td style="text-align:right;font-family:monospace;color:#e83050">${f(c.balance)}</td>
+      <td style="text-align:right;font-size:12px;color:#5a6080">${c.apr ? c.apr+'% APR' : c.promoEnd ? '0% promo' : '—'}</td>
+    </tr>`).join('') : '<tr><td colspan="3" style="color:#9099b8;font-style:italic">No debt cards — great!</td></tr>';
+
+  // ── NW table HTML ─────────────────────────────────────────────────────
+  const nwTableHTML = nwProjection.slice(0,12).map((p,i) => `
+    <tr style="${i%2===0?'background:#f7f8fc':''}">
+      <td style="padding:5px 10px;font-size:12px;color:#5a6080">${p.label}</td>
+      <td style="padding:5px 10px;text-align:right;font-family:monospace;font-size:12px">${f(p.bal)}</td>
+      <td style="padding:5px 10px;text-align:right;font-family:monospace;font-size:12px;color:#0aad60">${f(p.savings)}</td>
+      <td style="padding:5px 10px;text-align:right;font-family:monospace;font-size:12px;color:#e83050">${p.debt>0?'-'+f(p.debt):'—'}</td>
+      <td style="padding:5px 10px;text-align:right;font-family:monospace;font-size:12px;font-weight:600;color:${nwColor(p.nw)}">${f(p.nw)}</td>
+    </tr>`).join('');
+
+  // ── Full HTML ─────────────────────────────────────────────────────────
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FCC Monthly Report · ${reportMonth}</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'DM Sans',sans-serif;background:#fff;color:#1a1d2e;font-size:13px;line-height:1.5;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  /* ── Print setup ── */
+  @page{size:A4;margin:15mm 14mm 15mm 14mm}
+  @media print{
+    .no-print{display:none!important}
+    body{font-size:11.5px}
+    .page-break{page-break-before:always}
+  }
+
+  /* ── Layout ── */
+  .wrap{max-width:760px;margin:0 auto;padding:24px 20px}
+  .row{display:flex;gap:16px;margin-bottom:16px}
+  .col{flex:1;min-width:0}
+
+  /* ── Header ── */
+  .header{background:linear-gradient(135deg,#1a1d2e 0%,#2d3561 100%);color:#fff;border-radius:12px;padding:28px 28px 24px;margin-bottom:20px;position:relative;overflow:hidden}
+  .header::before{content:'';position:absolute;top:-40px;right:-40px;width:200px;height:200px;border-radius:50%;background:rgba(79,142,247,0.12)}
+  .header::after{content:'';position:absolute;bottom:-60px;left:20px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,0.03)}
+  .header-label{font-size:10px;font-weight:700;letter-spacing:0.15em;text-transform:uppercase;color:rgba(255,255,255,0.5);margin-bottom:6px}
+  .header h1{font-size:24px;font-weight:700;letter-spacing:-0.5px;margin-bottom:4px}
+  .header-sub{font-size:13px;color:rgba(255,255,255,0.6)}
+  .header-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:22px}
+  .hkpi{background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px 14px}
+  .hkpi-label{font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.45);margin-bottom:4px}
+  .hkpi-value{font-family:'DM Mono',monospace;font-size:18px;font-weight:500;letter-spacing:-0.5px}
+  .hkpi-sub{font-size:10px;color:rgba(255,255,255,0.4);margin-top:3px}
+
+  /* ── Section cards ── */
+  .section{border:1px solid #dde0ec;border-radius:10px;padding:18px 20px;margin-bottom:16px;background:#fff}
+  .section-title{font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:#9099b8;margin-bottom:14px;display:flex;align-items:center;gap:6px}
+  .section-title::after{content:'';flex:1;height:1px;background:#eef0f6}
+
+  /* ── KPI grid ── */
+  .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .kpi{background:#f7f8fc;border-radius:8px;padding:12px 14px}
+  .kpi-l{font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#9099b8;margin-bottom:4px}
+  .kpi-v{font-family:'DM Mono',monospace;font-size:17px;font-weight:500;letter-spacing:-0.5px}
+  .kpi-s{font-size:10px;color:#5a6080;margin-top:3px}
+
+  /* ── Tables ── */
+  table{width:100%;border-collapse:collapse}
+  th{font-size:9px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#9099b8;padding:6px 10px;text-align:left;border-bottom:1px solid #eef0f6}
+  td{padding:8px 10px;border-bottom:1px solid #f3f4f8;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+
+  /* ── Badges ── */
+  .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:0.04em}
+  .b-green{background:#e6f9f0;color:#0aad60}
+  .b-amber{background:#fef3e2;color:#d4870a}
+  .b-red{background:#fde8ec;color:#e83050}
+
+  /* ── Footer ── */
+  .footer{text-align:center;font-size:10px;color:#9099b8;margin-top:24px;padding-top:16px;border-top:1px solid #eef0f6}
+
+  /* ── Print button ── */
+  .print-bar{background:#f7f8fc;border-bottom:1px solid #dde0ec;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+  .print-bar h2{font-size:13px;font-weight:600;color:#1a1d2e}
+  .print-bar p{font-size:11px;color:#5a6080;margin-top:2px}
+  .btn-print{background:#2d6ef5;color:#fff;border:none;border-radius:7px;padding:9px 20px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:7px}
+  .btn-print:hover{background:#1a5ce8}
+  .divider{width:1px;height:30px;background:#eef0f6;margin:0 4px}
+</style>
+</head>
+<body>
+
+<!-- Print bar -->
+<div class="print-bar no-print">
+  <div>
+    <h2>FCC Monthly Report · ${reportMonth}</h2>
+    <p>When the print dialog opens, select <strong>Save as PDF</strong> and choose A4 paper size</p>
+  </div>
+  <button class="btn-print" onclick="window.print()">🖨️ Save as PDF</button>
+</div>
+
+<div class="wrap">
+
+  <!-- ══ HEADER ══════════════════════════════════════════════════ -->
+  <div class="header">
+    <div class="header-label">Financial Command Centre</div>
+    <h1>Monthly Report</h1>
+    <div class="header-sub">${today.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+    <div class="header-kpis">
+      <div class="hkpi">
+        <div class="hkpi-label">Current Balance</div>
+        <div class="hkpi-value" style="color:${currentBal>=600?'#22d47e':currentBal>=250?'#f0a732':'#ff5470'}">${f(currentBal)}</div>
+        <div class="hkpi-sub">Today's running balance</div>
+      </div>
+      <div class="hkpi">
+        <div class="hkpi-label">Total Savings</div>
+        <div class="hkpi-value" style="color:#22d47e">${f(totalSavings)}</div>
+        <div class="hkpi-sub">${S.savingsPots.length} pot${S.savingsPots.length!==1?'s':''}</div>
+      </div>
+      <div class="hkpi">
+        <div class="hkpi-label">Net Worth</div>
+        <div class="hkpi-value" style="color:${netWorth>=0?'#22d47e':'#ff5470'}">${netWorth<0?'-':''}${f(netWorth)}</div>
+        <div class="hkpi-sub">${netWorth>=0?'Positive ✓':'Working upward'}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ THIS MONTH AT A GLANCE ══════════════════════════════════ -->
+  <div class="section">
+    <div class="section-title">📅 ${today.toLocaleDateString('en-GB',{month:'long',year:'numeric'})} at a Glance</div>
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-l">Month Min Balance</div>
+        <div class="kpi-v" style="color:${rag(curMonMin)}">${f(curMonMin)}</div>
+        <div class="kpi-s">${curMonMin>=600?'🟢 Safe zone':curMonMin>=250?'🟡 Caution zone':'🔴 Danger zone'}</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Income This Month</div>
+        <div class="kpi-v" style="color:#0aad60">${f(monthIn)}</div>
+        <div class="kpi-s">Scheduled inflows</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-l">Outgoings This Month</div>
+        <div class="kpi-v" style="color:#e83050">${f(monthOut)}</div>
+        <div class="kpi-s">Bills, savings, debt</div>
+      </div>
+    </div>
+    ${totalDebt > 0 ? `
+    <div style="margin-top:12px;padding:10px 14px;background:#fde8ec;border-radius:8px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:11px;font-weight:700;color:#e83050">Total Debt Outstanding</div>
+        <div style="font-size:10px;color:#c0243a;margin-top:2px">${dfStr ? 'Projected debt-free: '+dfStr : 'Set up debt snowball to project payoff date'}</div>
+      </div>
+      <div style="font-family:'DM Mono',monospace;font-size:18px;font-weight:600;color:#e83050">${f(totalDebt)}</div>
+    </div>` : `
+    <div style="margin-top:12px;padding:10px 14px;background:#e6f9f0;border-radius:8px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">🎉</span>
+      <div style="font-size:12px;font-weight:600;color:#0aad60">No outstanding debt — excellent position!</div>
+    </div>`}
+  </div>
+
+  <!-- ══ BALANCE TREND (last 6 months) ═══════════════════════════ -->
+  <div class="section">
+    <div class="section-title">📊 Monthly Minimum Balance — Last 6 Months</div>
+    ${svgBar(last6, 400, 90)}
+    <div style="margin-top:10px;font-size:10px;color:#9099b8;line-height:1.6">
+      This shows the lowest your balance touched each month — the real stress-test figure.
+      ${curMonMin < 600 ? `<strong style="color:${rag(curMonMin)}"> This month's minimum of ${f(curMonMin)} is in the ${curMonMin<250?'danger':'caution'} zone.</strong>` : ''}
+    </div>
+  </div>
+
+  <!-- ══ 12-MONTH NET WORTH PROJECTION ═══════════════════════════ -->
+  <div class="section">
+    <div class="section-title">📈 Net Worth Projection — Next 12 Months</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+      <div>
+        <div style="font-size:10px;color:#9099b8">Starting net worth</div>
+        <div style="font-family:'DM Mono',monospace;font-size:16px;font-weight:600;color:${nwColor(nwStart)}">${nwStart<0?'-':''}${f(nwStart)}</div>
+      </div>
+      <div style="font-size:20px;color:#dde0ec">→</div>
+      <div style="text-align:right">
+        <div style="font-size:10px;color:#9099b8">Projected in 12 months</div>
+        <div style="font-family:'DM Mono',monospace;font-size:16px;font-weight:600;color:${nwColor(nwEnd)}">${nwEnd<0?'-':''}${f(nwEnd)}</div>
+      </div>
+    </div>
+    <div style="margin-bottom:4px">${svgLine(nwLinePoints, 500, 110, nwLineColor)}</div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:#9099b8;margin-bottom:14px">
+      ${nwProjection.filter((_,i)=>[0,2,5,8,11].includes(i)).map(p=>`<span>${p.label}</span>`).join('')}
+    </div>
+    <div style="font-size:11px;font-weight:600;color:${nwColor(nwChange)};margin-bottom:10px">
+      ${sign(nwChange)}${f(nwChange)} projected change over 12 months
+    </div>
+    <table>
+      <thead><tr>
+        <th>Month</th><th style="text-align:right">Current Acct</th>
+        <th style="text-align:right">Savings</th><th style="text-align:right">Debt</th>
+        <th style="text-align:right">Net Worth</th>
+      </tr></thead>
+      <tbody>${nwTableHTML}</tbody>
+    </table>
+  </div>
+
+  <!-- ══ SAVINGS POTS ══════════════════════════════════════════════ -->
+  <div class="section ${S.debtCards.length?'page-break':''}">
+    <div class="section-title">🏦 Savings Pots</div>
+    <table>
+      <thead><tr>
+        <th>Pot</th><th style="text-align:right">Balance</th>
+        <th style="text-align:right">Target</th><th style="text-align:right">Progress</th>
+        <th style="text-align:right">Est. Complete</th>
+      </tr></thead>
+      <tbody>${potRowsHTML}</tbody>
+    </table>
+  </div>
+
+  <!-- ══ DEBT BREAKDOWN ════════════════════════════════════════════ -->
+  ${S.debtCards.length ? `
+  <div class="section">
+    <div class="section-title">💳 Debt Breakdown</div>
+    <table>
+      <thead><tr><th>Card / Loan</th><th style="text-align:right">Balance</th><th style="text-align:right">Rate</th></tr></thead>
+      <tbody>${debtRowsHTML}</tbody>
+    </table>
+    ${dfStr ? `<div style="margin-top:12px;padding:10px 14px;background:#f7f8fc;border-radius:8px;font-size:12px;color:#5a6080">
+      🎯 Based on your current debt budget, projected debt-free date: <strong style="color:#1a1d2e">${dfStr}</strong>
+    </div>` : ''}
+  </div>` : ''}
+
+  <!-- ══ FOOTER ════════════════════════════════════════════════════ -->
+  <div class="footer">
+    Generated by Financial Command Centre ${FCC_VERSION} · ${today.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'})}
+    <br>All projections are estimates based on your scheduled transactions and may not reflect actual future balances.
+  </div>
+
+</div>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank');
+  if (!win) { alert('Pop-up blocked — please allow pop-ups for this site and try again.'); return; }
+  win.document.write(html);
+  win.document.close();
+}
+
 function renderSettings(){
   const el = document.getElementById('page-settings');
   const notifSupported = 'Notification' in window;
@@ -3732,7 +4147,10 @@ function renderSettings(){
   const isLocalFile    = location.protocol === 'file:';
 
   el.innerHTML = `
-<div class="sh"><div><h2>⚙️ Settings</h2><p>Preferences · data · notifications</p></div></div>
+<div class="sh">
+  <div><h2>⚙️ Settings</h2><p>Preferences · data · notifications</p></div>
+  <button class="btn btn-primary" onclick="generateMonthlyReport()" style="flex-shrink:0">📊 Monthly Report</button>
+</div>
 
 <div class="card" style="margin-bottom:14px">
   <div class="kpi-label" style="margin-bottom:12px">💾 Data & Sync</div>
